@@ -1,0 +1,14 @@
+# Secrets
+.env
+.env.example
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# Playwright traces are large and regenerable
+evidence/**/trace.zip
