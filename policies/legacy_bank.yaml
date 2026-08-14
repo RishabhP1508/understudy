@@ -1,0 +1,12 @@
+# Stub only. Phase 5 fills this in with real allowlist, risk, and limit values.
+version: 1
+entry_point: http://127.0.0.1:8000/
+allowlist:
+  domains: []
+  routes: []
+  action_types: []
+risk:
+  irreversible: []
+limits:
+  max_steps: 0
+  timeout_seconds: 0
