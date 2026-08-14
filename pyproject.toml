@@ -15,6 +15,7 @@ dependencies = [
     "uvicorn",
     "pyyaml",
     "google-genai",
+    "flask",
 ]
 
 [project.optional-dependencies]

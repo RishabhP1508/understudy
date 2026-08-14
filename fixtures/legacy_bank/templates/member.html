@@ -1,0 +1,18 @@
+<html>
+<head><title>Member Detail</title></head>
+<body bgcolor="#ffffff">
+<table class="tbl1" border="1" cellpadding="0" cellspacing="0"><tr><td class="td1">
+<table class="tbl2" border="1" cellpadding="4" cellspacing="0"><tr><td class="td2">
+<table class="tbl3" border="0" cellpadding="2" cellspacing="0">
+<tr><td class="td3"><font size="2">Member ID</font></td><td class="td4"><font size="2">{{ member.id }}</font></td></tr>
+<tr><td class="td3"><font size="2">Name</font></td><td class="td4"><font size="2">{{ member.name }}</font></td></tr>
+<tr><td class="td3"><font size="2">Status</font></td><td class="td4"><font size="2">{{ member.status }}</font></td></tr>
+<tr><td class="td3"><font size="2">Savings Balance</font></td><td class="td4">
+<iframe src="/member/{{ member.id }}/balance" width="200" height="30" frameborder="0"></iframe>
+</td></tr>
+</table>
+</td></tr></table>
+</td></tr></table>
+<center><a href="/member/{{ member.id }}/subaccount/new">Open Subaccount</a></center>
+</body>
+</html>

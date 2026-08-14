@@ -1,0 +1,25 @@
+<html>
+<head><title>New Subaccount</title></head>
+<body bgcolor="#ffffff">
+<table class="tbl1" border="1" cellpadding="0" cellspacing="0"><tr><td class="td1">
+<table class="tbl2" border="1" cellpadding="4" cellspacing="0"><tr><td class="td2">
+<form method="post" action="/member/{{ mid }}/subaccount/new">
+<table class="tbl3" border="0" cellpadding="2" cellspacing="0">
+<tr><td class="td3"><font size="2">Account Type</font></td><td class="td4">
+<select name="f1">
+<option value="SAV" {% if acct_type == "SAV" %}selected{% endif %}>Savings</option>
+<option value="CHK" {% if acct_type == "CHK" %}selected{% endif %}>Checking</option>
+</select></td></tr>
+<tr><td class="td3"><font size="2">Nickname</font></td><td class="td4">
+<input type="text" name="f2" value="{{ nickname }}"></td></tr>
+<tr><td class="td3"><font size="2">Initial Deposit</font></td><td class="td4">
+<input type="text" name="f7" value="{{ deposit }}">
+{% if deposit_error %}<font color="red">{{ deposit_error }}</font>{% endif %}
+</td></tr>
+<tr><td class="td5" colspan="2"><input type="button" value="Submit" onclick="this.form.submit()"></td></tr>
+</table>
+</form>
+</td></tr></table>
+</td></tr></table>
+</body>
+</html>
