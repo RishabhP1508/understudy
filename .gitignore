@@ -1,6 +1,5 @@
 # Secrets
 .env
-.env.example
 # Python
 __pycache__/
 *.py[cod]
@@ -12,3 +11,6 @@ __pycache__/
 
 # Playwright traces are large and regenerable
 evidence/**/trace.zip
+
+# Scratch output from the Playwright MCP browser used during verification
+.playwright-mcp/

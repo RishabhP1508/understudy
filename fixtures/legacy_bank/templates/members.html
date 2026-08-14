@@ -1,0 +1,30 @@
+<html>
+<head><title>Member Search</title></head>
+<body bgcolor="#ffffff">
+<center>
+<table class="tbl1" border="1" cellpadding="4" cellspacing="0">
+<tr><td class="td1"><font size="2"><b>Member Search</b></font></td></tr>
+<tr><td class="td2">
+<form method="get" action="/members">
+<table class="tbl2" border="0" cellpadding="2" cellspacing="0">
+<tr>
+<td class="td3"><font size="2">Member ID</font></td>
+<td class="td4"><input type="text" name="f7" value="{{ query or '' }}"></td>
+<td class="td5"><input type="button" value="Search" onclick="this.form.submit()"></td>
+</tr>
+</table>
+</form>
+</td></tr>
+{% if result %}
+<tr><td class="td6">
+{% if result.found %}
+<font size="2">Found: </font><a href="/member/{{ result.id }}">{{ result.id }} - {{ result.name }}</a>
+{% else %}
+<font size="2" color="red">No member matches that search.</font>
+{% endif %}
+</td></tr>
+{% endif %}
+</table>
+</center>
+</body>
+</html>
