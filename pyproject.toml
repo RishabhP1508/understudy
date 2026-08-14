@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "understudy"
+version = "0.1.0"
+requires-python = ">=3.11"
+description = "An LLM discovers a UI task once; the recording replays deterministically, with no model in the decision loop."
+dependencies = [
+    "pydantic>=2",
+    "playwright",
+    "typer",
+    "fastapi",
+    "uvicorn",
+    "pyyaml",
+    "google-genai",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "mypy", "ruff", "types-PyYAML"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-q -rs"
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src"]
+disallow_untyped_defs = true
+warn_unused_ignores = true
