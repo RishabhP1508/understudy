@@ -245,6 +245,8 @@ never be silent: it prints a reason naming the phase that will enable it.
   blocks both paths.)
 
 ## Conventions
+- Always run Python through .venv/Scripts/python.exe (Windows) or .venv/bin/python. Never bare
+  `python` or `pytest`: the machine default is 3.14 and the project is pinned to 3.11 per ADR 0001.
 - Python 3.11+, Pydantic v2 for every model that hits disk. No dataclasses for serialized types.
 - Playwright Python library for browser control, launched HEADED. Headed matters for the escalation
   handoff in Phase 10, so do not switch to headless for convenience.
