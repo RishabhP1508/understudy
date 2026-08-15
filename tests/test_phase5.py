@@ -218,6 +218,59 @@ def test_classify_submit_on_mutating_route_is_risky_via_route_not_label() -> Non
 
 
 # ----------------------------------------------------------------------------------------
+# Regression: a live discovery run found PolicyGate.dispatch reading only `surface.url` (a
+# frameset's SHELL, which never navigates -- docs/adr/0005) instead of `Surface.urls()` (every
+# loaded frame), so the mutating-route layer above never fired against the real fixture at all.
+# This is the test whose absence let that through: it goes through `PolicyGate.dispatch` and a
+# real (fake) Surface, not `classify()` called directly with a hand-built URL string.
+# ----------------------------------------------------------------------------------------
+
+
+class _FramesetSurface:
+    """Mirrors the real fixture's shape: `.url` is the frameset shell, which never itself
+    navigates, but `.urls()` additionally reports a content-frame URL that has actually
+    navigated onto a mutating route. `PolicyGate.dispatch` must consult `.urls()`, not `.url`
+    alone, or this scenario is invisible to it -- which is exactly the live defect."""
+
+    def __init__(self) -> None:
+        self.acted: list[Action] = []
+
+    @property
+    def url(self) -> str:
+        return "http://127.0.0.1:5055/app"  # the shell: never navigates in a frameset app
+
+    def urls(self) -> list[str]:
+        return [
+            "http://127.0.0.1:5055/app",
+            "http://127.0.0.1:5055/nav",
+            "http://127.0.0.1:5055/member/12345/subaccount/new",
+        ]
+
+    def observe(self) -> Observation:
+        return Observation(url=self.url, title="Fake", elements=[])
+
+    def act(self, action: Action) -> str | None:
+        self.acted.append(action)
+        return None
+
+
+def test_mutating_route_detected_via_content_frame_urls_not_shell_url() -> None:
+    policy = load_policy(POLICY_PATH)
+    gate = PolicyGate(policy, mode="discovery")
+    surface = _FramesetSurface()
+    submit = UIElement(node_id="0", role="button", name="Submit")
+
+    with pytest.raises(EscalationRequired) as exc_info:
+        gate.dispatch(surface, Click(node_id="0"), element=submit)
+
+    decision = exc_info.value.decision
+    assert decision.risk == RiskClass.RISKY_IRREVERSIBLE.value
+    assert "subaccount/new" in decision.risk_reason
+    assert "http://127.0.0.1:5055/member/12345/subaccount/new" in decision.checked_urls
+    assert surface.acted == []  # refused before surface.act() ever ran
+
+
+# ----------------------------------------------------------------------------------------
 # T3: RISKY_IRREVERSIBLE handling differs by mode.
 # ----------------------------------------------------------------------------------------
 
@@ -550,6 +603,86 @@ def test_live_external_redirect_is_navigation_blocked() -> None:
                 f"access?): {exc}"
             )
         pytest.fail("expected NavigationBlocked for the off-allowlist redirect to example.com")
+    finally:
+        surface.close()
+
+
+def _find(observation: Observation, role: str, name_contains: str) -> UIElement:
+    for element in observation.elements:
+        if element.role == role and name_contains in element.name:
+            return element
+    raise AssertionError(
+        f"no element with role={role!r} whose name contains {name_contains!r}; got: "
+        f"{[(e.role, e.name) for e in observation.elements]}"
+    )
+
+
+def test_live_mutating_route_is_detected_via_content_frame_not_frameset_shell() -> None:
+    """Reproduces the live defect directly (docs/adr/0007's update): drives WebSurface through
+    the gate with no LLM, actually reaching the subaccount form inside the content frame, where
+    `surface.url` (the frameset shell) sits on `/app` for the whole test but the content frame
+    has genuinely navigated onto the `mutating_routes` pattern `/member/*/subaccount/new`."""
+    if not _fixture_app_reachable():
+        pytest.skip(
+            "the legacy_bank fixture app is not reachable on 127.0.0.1:5055; start it with "
+            "`.venv/Scripts/python.exe -m fixtures.legacy_bank --port 5055` before running "
+            "this test"
+        )
+
+    from understudy.surface.web import WebSurface
+
+    policy = load_policy(POLICY_PATH)
+    try:
+        surface = WebSurface(policy=policy, headless=False)
+    except Exception as exc:  # noqa: BLE001 - reported as a skip reason, not a failure
+        pytest.skip(f"could not launch a Playwright browser: {exc}")
+        return
+
+    gate = PolicyGate(policy, mode="discovery")
+    try:
+        gate.dispatch(surface, Navigate(url=policy.entry_point))  # -> /login
+
+        obs = surface.observe()
+        username = _find(obs, "textbox", "Username")
+        gate.dispatch(surface, Type(node_id=username.node_id, text="tester"), element=username)
+        obs = surface.observe()
+        password = _find(obs, "textbox", "Password")
+        gate.dispatch(surface, Type(node_id=password.node_id, text="secret"), element=password)
+        obs = surface.observe()
+        login_button = _find(obs, "button", "Login")
+        gate.dispatch(surface, Click(node_id=login_button.node_id), element=login_button)
+
+        # Now at /app, the frameset shell -- it never reloads again for the rest of this test
+        # (docs/adr/0005); everything below happens inside the content frame.
+        obs = surface.observe()
+        search_field = _find(obs, "textbox", "Member ID")
+        gate.dispatch(
+            surface, Type(node_id=search_field.node_id, text="12345"), element=search_field
+        )
+        obs = surface.observe()
+        search_button = _find(obs, "button", "Search")
+        gate.dispatch(surface, Click(node_id=search_button.node_id), element=search_button)
+
+        obs = surface.observe()
+        member_link = _find(obs, "link", "12345")
+        gate.dispatch(surface, Click(node_id=member_link.node_id), element=member_link)
+
+        obs = surface.observe()
+        open_subaccount = _find(obs, "link", "Open Subaccount")
+        gate.dispatch(surface, Click(node_id=open_subaccount.node_id), element=open_subaccount)
+
+        # The content frame has now genuinely navigated onto the mutating route; the frameset
+        # shell (surface.url) has not moved from /app this entire time -- the exact shape of the
+        # live defect.
+        assert surface.url == "http://127.0.0.1:5055/app"
+        assert any(u.endswith("/member/12345/subaccount/new") for u in surface.urls())
+
+        obs = surface.observe()
+        submit_button = _find(obs, "button", "Submit")
+        with pytest.raises(EscalationRequired) as exc_info:
+            gate.dispatch(surface, Click(node_id=submit_button.node_id), element=submit_button)
+        assert exc_info.value.decision.risk == RiskClass.RISKY_IRREVERSIBLE.value
+        assert "subaccount/new" in exc_info.value.decision.risk_reason
     finally:
         surface.close()
 

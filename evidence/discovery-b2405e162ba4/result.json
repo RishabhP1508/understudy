@@ -1,0 +1,20 @@
+{
+  "status": "goal_verified",
+  "run_id": "b2405e162ba4",
+  "steps_executed": 8,
+  "rounds": 8,
+  "rejected_turns": 0,
+  "outputs": {
+    "savings_balance": "$1,204.55"
+  },
+  "checkpoint": {
+    "target": "page",
+    "value": "$1,204.55",
+    "kind": "text_present"
+  },
+  "usage": {
+    "prompt_tokens": 21369,
+    "completion_tokens": 324,
+    "total_tokens": 22422
+  }
+}

@@ -287,3 +287,46 @@ raises an error instead of going quietly dormant.
     a crashed run still has every turn it completed. Why: the alternative (buffer the transcript
     in memory, write it once at the end) loses the R8 evidence trail on exactly the runs most
     worth debugging -- the ones that did not finish.
+
+## Phase 7 decisions
+
+56. Provider selection is one `build_llm(settings) -> LLMClient` behind the existing protocol,
+    with a registry of one entry (`{"gemini": GeminiClient}`), chosen by `LLM_PROVIDER`
+    (default `"gemini"`). Why: one real implementation behind the protocol is the seam the brief
+    actually asks for; a second, never-exercised provider client would be gold-plating with no
+    test that ever calls it live.
+57. A discovery turn sends the model a diff of `render()` output, built with
+    `difflib.unified_diff` over two full renders, ONLY when `Observation.digest()` is unchanged
+    from the previous turn; every other turn (turn 1, and a periodic refresh every
+    `full_render_every` turns) gets a full render. Why: the model addresses elements purely by
+    the `[index]` position in that turn's rendered list, so a diff sent while the element list
+    itself changed would leave the model acting on a stale index -- a wrong-element click, not a
+    token saving. `digest()` already deliberately excludes `value` (Phase 6), so an unchanged
+    digest is the one condition under which every index is provably still correct. See
+    `docs/adr/0010-diff-observations-and-stopping-conditions.md`.
+58. Seven stopping conditions replace a single step cap: `goal_verified`, `max_steps`, `timeout`,
+    `no_progress`, `loop_detected`, `dead_end`, `escalation`. Why: a step cap alone cannot say HOW
+    a run is stuck, and the fix differs by shape. `no_progress` (actions dispatch, the page does
+    not move) and `dead_end` (actions do not dispatch at all, because the target will not
+    resolve) are deliberately different signals with different fixes -- a better prompt or
+    checkpoint for the first, a better locator for the second. One shared `stall_limit` governs
+    all three stall-style conditions (`no_progress`, `loop_detected`, `dead_end`), because they
+    are the same "how many times before we call it" question, not three independently-tuned
+    knobs. See `docs/adr/0010`.
+59. `EscalationRequired` is now caught inside the discovery loop and ends the run with the
+    `escalation` status, rather than propagating as an exception out of `run()` (Phase 5 left
+    this open deliberately). Why: Phase 10's live handoff needs a run that ends with a status the
+    caller can read, not a stack trace the CLI has to catch specially. `NavigationBlocked` still
+    propagates uncaught: a session that left the allowlist is not a state worth resuming
+    reasoning from at all.
+60. Every tool call's `rationale` is validated once, immediately after the model's tool call is
+    received and before any tool-specific branching -- including `finish` and `escalate`, which
+    previously were not checked the same uniform way action tools were. Why: "every action tool
+    requires a rationale" (Phase 2 decision 28) is truer as one gate all eight tools pass through
+    than as a check duplicated, or forgotten, per tool.
+61. `discover` never overwrites an existing `{slug}.v<N>.json`; it writes `{slug}.v<N+1>.json` and
+    sets `capability.version` to match, so artifacts are append-only. No test may depend on the
+    frozen content of a file under `artifacts/`, only on inputs it constructs itself. Why: a
+    second real run of the same goal text silently destroyed this project's own non-negotiable
+    Phase 2 artifact, which turned out not to be recoverable at all. See
+    `docs/adr/0011-artifacts-are-versioned-and-tests-never-pin-to-them.md`.

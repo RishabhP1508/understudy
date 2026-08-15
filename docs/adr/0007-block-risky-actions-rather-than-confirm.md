@@ -52,6 +52,53 @@ finite list of risky-sounding words can cover every legacy app's own naming conv
 20-year-old back office is exactly the kind of surface where "Submit" is doing the work "Confirm
 Transfer" would do elsewhere.
 
+## Update (Phase 7 hotfix): the route heuristic was wired to the wrong URL and never actually fired
+
+State this plainly: from the moment this ADR was accepted through the Phase 7 live discovery run, the
+route heuristic above was **inert against the real fixture**. It was correct in design and untested
+against a real surface, and the gap between those two things is exactly how it shipped broken.
+
+The live run "open a new sub-account for member 12345 and reach the confirmation screen" completed
+`goal_verified` in 12 rounds. It should not have: the final action was a click on the subaccount form's
+"Submit" control, classified `SAFE_REVERSIBLE` and dispatched with no escalation, even though it commits
+state and is irreversible.
+
+**The measured cause.** `PolicyGate.dispatch` read `surface.url` -- `WebSurface`'s current top-level
+`page.url` -- as "the current route" for both the allowlist check and the call into `classify()`. In
+`fixtures/legacy_bank`, `/app` serves a frameset (`app_frameset.html`) whose two frames do all of the
+actual navigating; the top-level document itself never reloads again for the rest of the session. This
+is the identical fact `docs/adr/0005-child-frame-navigation-wait.md` already recorded for click waits,
+and it applies here too: measured directly against the live fixture, mid-session,
+
+    top-level page.url  -> http://127.0.0.1:5055/app
+       frame: navframe      -> http://127.0.0.1:5055/nav
+       frame: contentframe  -> http://127.0.0.1:5055/member/12345/subaccount/new
+
+Every action after login was policy-checked against `/app`, which never matches `mutating_routes`
+(`/member/*/subaccount/new`) no matter what the content frame is actually showing. The route layer
+never fired once, against any real session, since it was written. `test_classify_submit_on_mutating_route_is_risky_via_route_not_label`
+kept passing regardless, because it calls `classify()` directly with a hand-built URL string and never
+goes through a real surface -- it asserted the rule, not the wiring, and that gap is exactly what let
+this through.
+
+**The fix.** `Surface` gained an `urls()` method: every URL currently loaded, top-level plus every
+child frame (`WebSurface.urls()`; `DesktopSurface.urls()` raises, like its other methods).
+`PolicyGate.dispatch` now reads `urls()`, not `.url`, for a non-Navigate action's allowlist and risk
+checks: the allowlist refuses if ANY loaded URL falls outside it, and `classify()` treats the action as
+mutating if ANY loaded URL matches `mutating_routes`. Both are deliberately conservative in the same
+direction as the rest of this ADR: with several frames loaded there is no way to always know which one
+an action actually commits against, and over-triggering is the safe failure mode, not under-triggering.
+`surface.url` is kept on `PolicyDecision` for a readable single value; a new `checked_urls` field
+records the full set, so a reviewer can see what was actually checked instead of trusting the label.
+
+The regression coverage this gap needed is a test that goes through `PolicyGate.dispatch` and a real
+(fake, or live) `Surface`, not `classify()` in isolation:
+`tests/test_phase5.py::test_mutating_route_detected_via_content_frame_urls_not_shell_url` (a fake
+surface whose `.url` is a shell and whose `.urls()` includes a mutating content-frame URL) and
+`tests/test_phase5.py::test_live_mutating_route_is_detected_via_content_frame_not_frameset_shell` (the
+real fixture, driven directly through the gate, no LLM: log in, search for member 12345, open the
+subaccount form, and assert the gate raises `EscalationRequired` on the Submit click).
+
 ## Tradeoff
 
 Route scoping buys coverage at the cost of precision: `mutating_routes` flags a whole route, not a

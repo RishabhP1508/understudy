@@ -14,7 +14,7 @@ from google.genai import errors
 from understudy.agent.loop import run
 from understudy.config import load_settings
 from understudy.evidence.logger import EvidenceLogger
-from understudy.llm.gemini import GeminiClient
+from understudy.llm.base import build_llm
 from understudy.record.recorder import build_capability
 from understudy.replay import engine as replay_engine
 from understudy.safety.policy import (
@@ -33,6 +33,25 @@ app = typer.Typer(add_completion=False)
 def _slugify(text: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return slug or "capability"
+
+
+_ARTIFACT_VERSION_RE = re.compile(r"\.v(\d+)\.json$")
+
+
+def _next_artifact_version(artifacts_dir: Path, slug: str) -> int:
+    """1 if no `{slug}.v*.json` exists yet, else one past the highest version already on disk.
+
+    Artifacts are append-only (R2: versioned): a second successful discover run of the same
+    goal text must never silently overwrite the first recording. That is exactly how the one
+    artifact this project shipped, from a genuine earlier discovery run, was lost -- `discover`
+    always wrote `{slug}.v1.json` with no check for a prior file.
+    """
+    versions = [
+        int(match.group(1))
+        for path in artifacts_dir.glob(f"{slug}.v*.json")
+        if (match := _ARTIFACT_VERSION_RE.search(path.name))
+    ]
+    return max(versions, default=0) + 1
 
 
 def _policy_exception_message(exc: EscalationRequired | NavigationBlocked | PolicyDenied) -> str:
@@ -66,20 +85,26 @@ def discover(
     typer.echo(f"target: {resolved_target}")
 
     settings = load_settings(policy)
-    if not settings.gemini_api_key:
-        typer.echo("GEMINI_API_KEY is not set; discovery needs a live model. See .env.example.")
-        raise typer.Exit(1)
+    try:
+        llm = build_llm(settings)
+    except ValueError as exc:
+        typer.echo(f"{exc} See .env.example.")
+        raise typer.Exit(1) from None
+    # build_llm's return type is the provider-agnostic LLMClient protocol; `model` and
+    # `total_usage` are real attributes of the one concrete implementation (GeminiClient), read
+    # via getattr rather than widened onto the protocol itself, so a fake LLMClient in a test
+    # never has to carry attributes it does not use.
+    model_name = getattr(llm, "model", "unknown-model")
 
     run_id = uuid.uuid4().hex[:12]
     logger = EvidenceLogger(run_id, "discovery", base_dir=evidence_dir)
-    llm = GeminiClient(api_key=settings.gemini_api_key)
     gate = PolicyGate(policy_obj, logger, mode="discovery")
     surface = WebSurface(policy=policy_obj, headless=False)
 
     max_steps = policy_obj.max_steps
     timeout_s = policy_obj.max_wall_clock_seconds
 
-    logger.event("run_start", goal=goal, target=resolved_target, run_id=run_id, model=llm.model)
+    logger.event("run_start", goal=goal, target=resolved_target, run_id=run_id, model=model_name)
     logger.start_trace(surface)
     outcome = None
     try:
@@ -92,10 +117,12 @@ def discover(
             logger=logger,
             max_steps=max_steps,
             timeout_s=timeout_s,
+            stall_limit=policy_obj.stall_limit,
+            full_render_every=policy_obj.full_render_every,
         )
     except errors.APIError as exc:
         typer.echo(
-            f"Gemini API error ({exc.code} {exc.status}) for model {llm.model}: {exc.message}. "
+            f"Gemini API error ({exc.code} {exc.status}) for model {model_name}: {exc.message}. "
             "Set GEMINI_MODEL to another model or wait for the quota to reset."
         )
         raise typer.Exit(1) from None
@@ -112,7 +139,9 @@ def discover(
     finally:
         logger.stop_trace(surface, keep=(outcome is None or outcome.status != "goal_verified"))
         surface.close()
-    logger.event("run_end", status=outcome.status, steps_executed=outcome.steps_executed)
+    # run() already wrote the one terminal "run_end" event for this run (agent/loop.py's _end()
+    # or its goal_verified branch, whichever fired) -- logging a second one here duplicated it in
+    # every run's evidence, with no way for a consumer to tell which was authoritative.
     logger.write_result(outcome)
 
     typer.echo(f"status: {outcome.status}")
@@ -121,7 +150,7 @@ def discover(
     typer.echo(f"rejected turns: {outcome.rejected_turns}")
     typer.echo(f"outputs: {json.dumps(outcome.outputs)}")
     typer.echo(f"usage (this run): {json.dumps(outcome.usage)}")
-    typer.echo(f"usage (client total): {json.dumps(llm.total_usage)}")
+    typer.echo(f"usage (client total): {json.dumps(getattr(llm, 'total_usage', {}))}")
 
     if outcome.status != "goal_verified":
         typer.echo("goal was not verified; no artifact recorded.")
@@ -133,13 +162,15 @@ def discover(
         goal=goal,
         target=resolved_target,
         run_id=run_id,
-        model=llm.model,
+        model=model_name,
         capability_id=slug,
         name=goal,
     )
     artifacts_dir = Path("artifacts")
     artifacts_dir.mkdir(exist_ok=True)
-    artifact_path = artifacts_dir / f"{slug}.v1.json"
+    version = _next_artifact_version(artifacts_dir, slug)
+    capability = capability.model_copy(update={"version": version})
+    artifact_path = artifacts_dir / f"{slug}.v{version}.json"
     artifact_path.write_text(Redactor().dumps(capability, indent=2), encoding="utf-8")
     typer.echo(f"artifact written: {artifact_path}")
 
