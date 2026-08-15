@@ -12,12 +12,18 @@ import typer
 from google.genai import errors
 
 from understudy.agent.loop import run
-from understudy.config import load_policy, load_settings
+from understudy.config import load_settings
 from understudy.evidence.logger import EvidenceLogger
 from understudy.llm.gemini import GeminiClient
 from understudy.record.recorder import build_capability
 from understudy.replay import engine as replay_engine
-from understudy.safety.policy import PolicyGate
+from understudy.safety.policy import (
+    EscalationRequired,
+    NavigationBlocked,
+    PolicyDenied,
+    PolicyGate,
+    load_policy,
+)
 from understudy.safety.redact import Redactor
 from understudy.surface.web import WebSurface
 
@@ -27,6 +33,12 @@ app = typer.Typer(add_completion=False)
 def _slugify(text: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
     return slug or "capability"
+
+
+def _policy_exception_message(exc: EscalationRequired | NavigationBlocked | PolicyDenied) -> str:
+    if isinstance(exc, NavigationBlocked):
+        return f"navigation left the allowlist: {exc.urls}"
+    return f"{exc.decision.rule}: {exc.decision.reason}"
 
 
 @app.command()
@@ -43,9 +55,9 @@ def discover(
         Path, typer.Option("--policy", help="path to the policy YAML")
     ] = Path("policies/legacy_bank.yaml"),
 ) -> None:
-    policy_data = load_policy(policy)
-    resolved_target = target or policy_data.get("entry_point")
-    if not isinstance(resolved_target, str):
+    policy_obj = load_policy(policy)
+    resolved_target = target or policy_obj.entry_point
+    if not resolved_target:
         typer.echo("no --target given and the policy has no entry_point to default to.")
         raise typer.Exit(1)
     typer.echo(f"target: {resolved_target}")
@@ -58,12 +70,11 @@ def discover(
     run_id = uuid.uuid4().hex[:12]
     logger = EvidenceLogger("discovery", run_id)
     llm = GeminiClient(api_key=settings.gemini_api_key)
-    gate = PolicyGate(logger)
-    surface = WebSurface(headless=False)
+    gate = PolicyGate(policy_obj, logger, mode="discovery")
+    surface = WebSurface(policy=policy_obj, headless=False)
 
-    limits = policy_data.get("limits") or {}
-    max_steps = int(limits.get("max_steps") or 25)
-    timeout_s = float(limits.get("timeout_seconds") or 180)
+    max_steps = policy_obj.max_steps
+    timeout_s = policy_obj.max_wall_clock_seconds
 
     logger.event("run_start", goal=goal, target=resolved_target, run_id=run_id, model=llm.model)
     try:
@@ -82,6 +93,16 @@ def discover(
             f"Gemini API error ({exc.code} {exc.status}) for model {llm.model}: {exc.message}. "
             "Set GEMINI_MODEL to another model or wait for the quota to reset."
         )
+        raise typer.Exit(1) from None
+    except (EscalationRequired, NavigationBlocked, PolicyDenied) as exc:
+        message = _policy_exception_message(exc)
+        # replay/engine.py logs the equivalent of this into its own run.jsonl (a hard_failure
+        # event carrying the same reason) because a policy stop there has to be a returned
+        # result, not a raised exception. Discovery's stop is a raised exception by design (R6:
+        # a human needs to see and act on it), but the evidence trail should not go dark just
+        # because the run ends via an exception instead of a return.
+        logger.event("run_end", status="policy_stopped", reason=message)
+        typer.echo(f"discovery stopped by policy: {message}")
         raise typer.Exit(1) from None
     finally:
         surface.close()
@@ -123,9 +144,19 @@ def replay(
     policy: Annotated[
         Path, typer.Option("--policy", help="path to the policy YAML")
     ] = Path("policies/legacy_bank.yaml"),
+    allow_risky: Annotated[
+        bool,
+        typer.Option(
+            "--allow-risky",
+            help=(
+                "permit a RISKY_IRREVERSIBLE step to execute, if and only if the capability's "
+                "own status is 'approved'"
+            ),
+        ),
+    ] = False,
 ) -> None:
     parsed_params = json.loads(params)
-    result = replay_engine.replay(artifact, parsed_params, policy)
+    result = replay_engine.replay(artifact, parsed_params, policy, allow_risky=allow_risky)
     typer.echo(Redactor().dumps(result, indent=2))
     if result.kind == "hard_failure":
         raise typer.Exit(1)

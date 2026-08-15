@@ -14,11 +14,20 @@ from typing import Any
 
 from understudy.evidence.logger import EvidenceLogger
 from understudy.models.artifact import Capability, Checkpoint, Step, checkpoint_satisfied
+from understudy.models.observation import UIElement
 from understudy.models.result import HardFailure, ReplayResult, Success
-from understudy.safety.policy import PolicyGate
+from understudy.safety.policy import (
+    EscalationRequired,
+    NavigationBlocked,
+    PolicyDenied,
+    PolicyGate,
+    load_policy,
+)
 from understudy.surface.base import Action, Click, Navigate, ReadText, Select, Type
 from understudy.surface.locator import resolve
 from understudy.surface.web import WebSurface
+
+_PolicyException = (PolicyDenied, EscalationRequired, NavigationBlocked)
 
 
 def _action_for_step(step: Step, node_id: str | None) -> Action:
@@ -35,11 +44,24 @@ def _action_for_step(step: Step, node_id: str | None) -> Action:
     raise ValueError(f"unsupported step action: {step.action!r}")
 
 
+def _policy_exception_reason(exc: Exception) -> str:
+    if isinstance(exc, NavigationBlocked):
+        return f"navigation left the allowlist: {exc.urls}"
+    decision = getattr(exc, "decision", None)
+    if decision is not None:
+        return f"{decision.rule}: {decision.reason}"
+    return str(exc)
+
+
 def _screenshot_on_failure(logger: EvidenceLogger, surface: WebSurface, step_index: int) -> None:
     # A screenshot failure (e.g. the page already crashed, which is exactly when a hard failure
-    # is likely) must never replace the real hard failure with an unrelated exception.
+    # is likely) must never replace the real hard failure with an unrelated exception. Re-observe
+    # immediately before screenshotting (D7): masking uses element bounds from an observation, and
+    # a stale observation describes pixels that may no longer match the current page, which would
+    # paint the mask in the wrong place -- a leak, not merely wrong.
     try:
-        logger.screenshot(surface, step_index)
+        observation = surface.observe()
+        logger.screenshot(surface, step_index, observation=observation)
     except Exception as exc:
         logger.event("screenshot_failed", step=step_index, reason=str(exc))
 
@@ -72,14 +94,26 @@ def _finish_result(
     )
 
 
-def replay(artifact_path: Path, params: dict[str, Any], policy_path: Path) -> ReplayResult:
-    # params and policy_path are accepted for parity with the Phase 8/5 contract. Phase 2 has no
-    # step parameterization and no allowlist enforcement yet, so neither is used below.
+def replay(
+    artifact_path: Path,
+    params: dict[str, Any],
+    policy_path: Path,
+    allow_risky: bool = False,
+) -> ReplayResult:
+    # params is accepted for parity with the Phase 8 contract; this phase has no step
+    # parameterization yet, so it is unused below.
     capability = Capability.model_validate_json(artifact_path.read_text(encoding="utf-8"))
+    policy = load_policy(policy_path)
     run_id = uuid.uuid4().hex[:12]
     logger = EvidenceLogger("replay", run_id)
-    gate = PolicyGate(logger)
-    surface = WebSurface(headless=False)
+    gate = PolicyGate(
+        policy,
+        logger,
+        mode="replay",
+        allow_risky=allow_risky,
+        capability_status=capability.status,
+    )
+    surface = WebSurface(policy=policy, headless=False)
     outputs: dict[str, str] = {}
 
     logger.event(
@@ -89,15 +123,35 @@ def replay(artifact_path: Path, params: dict[str, Any], policy_path: Path) -> Re
         params=params,
     )
     try:
-        gate.dispatch(
-            surface,
-            Navigate(url=capability.target.entry_point),
-            context={"tool": "navigate", "rationale": "open the capability's recorded entry point"},
-        )
+        try:
+            gate.dispatch(
+                surface,
+                Navigate(url=capability.target.entry_point),
+                context={
+                    "tool": "navigate",
+                    "rationale": "open the capability's recorded entry point",
+                },
+            )
+        except _PolicyException as exc:
+            # Replay's contract is to return a result, never raise -- a policy denial anywhere,
+            # including the entry-point navigate itself (which used to sit outside any except
+            # clause and would have propagated a raw exception out of replay()), becomes a
+            # HardFailure like any other runtime condition replay cannot proceed past.
+            reason = _policy_exception_reason(exc)
+            logger.event("hard_failure", step_index=-1, reason=reason)
+            _screenshot_on_failure(logger, surface, 0)
+            return HardFailure(
+                step_index=-1,
+                expected="the capability's recorded entry-point navigation to be permitted "
+                "by policy",
+                observed=reason,
+                message="policy denied the capability's recorded entry-point navigation",
+            )
 
         for step in capability.steps:
             observation = surface.observe()
             node_id: str | None = None
+            element: UIElement | None = None
             if step.target is not None:
                 resolution = resolve(step.target, observation)
                 if resolution.element is None:
@@ -118,11 +172,25 @@ def replay(artifact_path: Path, params: dict[str, Any], policy_path: Path) -> Re
                         message=f"could not resolve the target for step {step.index}",
                     )
                 node_id = resolution.element.node_id
+                element = resolution.element
 
             try:
                 action = _action_for_step(step, node_id)
                 result_text = gate.dispatch(
-                    surface, action, context={"tool": step.action, "rationale": step.rationale}
+                    surface,
+                    action,
+                    context={"tool": step.action, "rationale": step.rationale},
+                    element=element,
+                )
+            except _PolicyException as exc:
+                reason = _policy_exception_reason(exc)
+                logger.event("hard_failure", step_index=step.index, reason=reason)
+                _screenshot_on_failure(logger, surface, step.index)
+                return HardFailure(
+                    step_index=step.index,
+                    expected=f"step {step.index} ({step.action}) to be permitted by policy",
+                    observed=reason,
+                    message=f"policy denied step {step.index}",
                 )
             except Exception as exc:
                 # Phase 2 has only Success/HardFailure; Phase 9 adds a real recovery taxonomy

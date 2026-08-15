@@ -1,12 +1,59 @@
-# Stub only. Phase 5 fills this in with real allowlist, risk, and limit values.
+# Policy for the legacy_bank fixture. Loaded into a typed Policy (safety/policy.py) via
+# load_policy(). This file is the allowlist, action/role/risk vocabulary, and limits that
+# PolicyGate enforces on every action, in both discovery and replay.
+
 version: 1
+app_id: legacy_bank
 entry_point: http://127.0.0.1:5055/login
-allowlist:
-  domains: []
-  routes: []
-  action_types: []
-risk:
-  irreversible: []
-limits:
-  max_steps: 25
-  timeout_seconds: 180
+
+# Origin match is exact (scheme://netloc). Route match is fnmatch against the URL PATH only
+# (never the query string), and "*" crosses "/", so "/member/*" also covers
+# "/member/12345/subaccount/new" -- there is no separate wildcard for "one segment".
+allowed_origins:
+  - http://127.0.0.1:5055
+allowed_routes:
+  - /login
+  - /app
+  - /nav
+  - /members
+  - /member/*
+  - /external
+
+# /external is deliberately allowed here: reaching it and then being redirected to
+# https://example.com/ is what proves the ORIGIN guard (not the route list) is what actually
+# stops the escape, since https://example.com is never in allowed_origins.
+#
+# /admin/inject is deliberately NOT listed: it is the fixture's own failure-injection control,
+# and tests drive it directly against the Flask app, never through the agent's surface. If the
+# agent ever tried to navigate there, the allowlist should refuse it like any other unlisted route.
+
+allowed_actions: [navigate, click, type, select, read_text]
+
+# Enforced for state-changing actions only (click/type/select/key). read_text is exempt: reading
+# a value is not an action on the application, so its target's role is not gated the same way.
+allowed_roles: [textbox, searchbox, combobox, button, link, checkbox, radio, option]
+
+# Label-based risk heuristic (safety/risk.py): a click on a button/link whose accessible name
+# matches one of these (case-insensitive) is RISKY_IRREVERSIBLE.
+risky_labels: [transfer, delete, approve, submit payment, close account, wire]
+
+# Second layer behind risky_labels: the fixture's subaccount submit control is literally named
+# "Submit", which matches none of the labels above, so only route scoping catches it. Any click
+# on a mutating route is treated as irreversible regardless of what the control is named.
+mutating_routes:
+  - /member/*/subaccount/new
+
+sensitive_fields:
+  secret: [password, passwd, pin, token, secret, api_key, apikey]
+  pii: [ssn, social security, date of birth, dob, card number, account number, email, phone]
+
+max_steps: 25
+max_wall_clock_seconds: 180
+max_action_retries: 2
+
+# Regexes the agent's typed text must not match: an SSN, a payment card number, a PEM private
+# key header. Matched with re.search against the literal text of a Type action.
+forbidden_text_patterns:
+  - "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+  - "\\b(?:\\d[ -]?){13,19}\\b"
+  - "-----BEGIN(?: RSA)? PRIVATE KEY-----"

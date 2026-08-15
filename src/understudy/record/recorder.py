@@ -1,10 +1,14 @@
 """build_capability: a separate pass over a written run.jsonl, producing a Capability.
 
 This reads the evidence log rather than any live object, so recording never depends on the
-discovery process still being in memory. Only successfully dispatched actions become Steps; the
-harness's own bootstrap navigate to the target (always the first dispatch event) is represented
+discovery process still being in memory. Only ALLOWED `policy_decision` events become Steps: a
+refused one never reached surface.act, so it never happened as far as the recorded flow is
+concerned (Phase 5 renamed the event PolicyGate.dispatch logs from "dispatch" to
+"policy_decision" and gave it an `allowed` field precisely so a refusal and an action are the same
+event type, distinguished by that field, rather than needing two names). The harness's own
+bootstrap navigate to the target (always the first ALLOWED policy_decision event) is represented
 by target.entry_point instead, so it is not duplicated as a Step. Pruning and value
-parameterization (turning "12345" into a named input) are Phase 8 concerns; Phase 2 records the
+parameterization (turning "12345" into a named input) are Phase 8 concerns; this phase records the
 literal values the run actually used.
 """
 
@@ -39,7 +43,11 @@ def build_capability(
 
     for event in events:
         event_type = event.get("type")
-        if event_type == "dispatch":
+        if event_type == "policy_decision":
+            decision = event.get("decision") or {}
+            if decision.get("allowed") is not True:
+                # A refused action was never dispatched to the surface; it cannot become a Step.
+                continue
             if not first_dispatch_seen:
                 # The harness's own bootstrap navigate to the target; target.entry_point
                 # already records this, so it is not also recorded as a Step.

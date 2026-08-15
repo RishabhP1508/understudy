@@ -19,14 +19,14 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 from understudy.models.observation import Observation, UIElement
+from understudy.safety.policy import Policy
 from understudy.surface.base import Action, Click, Key, Navigate, ReadText, Select, Type
 
 _LINE_RE = re.compile(r"^(?P<indent>\s*)- (?P<content>.*)$")
@@ -41,6 +41,28 @@ _ATTR_NAME_CAP = 30
 # Bounded window (measured, not guessed -- see docs/adr/0005-child-frame-navigation-wait.md) to
 # detect whether a click started a navigation at all, before deciding it did not.
 _NAV_DETECT_TIMEOUT_MS = 300
+
+
+def _match_sensitivity(
+    candidates: tuple[str, ...], policy: Policy | None
+) -> Literal["none", "secret", "pii"]:
+    """Data-driven, never keyword-on-prose: match candidate attribute strings (name, name
+    attribute, id, autocomplete) against policy.sensitive_fields, case-insensitive substring.
+    Structural signals (type="password") are checked separately by the caller and win outright,
+    since they are stronger evidence than any name-based pattern.
+    """
+    if policy is None:
+        return "none"
+    haystacks = [candidate.lower() for candidate in candidates if candidate]
+    if not haystacks:
+        return "none"
+    for pattern in policy.sensitive_fields.get("secret", []):
+        if any(pattern.lower() in haystack for haystack in haystacks):
+            return "secret"
+    for pattern in policy.sensitive_fields.get("pii", []):
+        if any(pattern.lower() in haystack for haystack in haystacks):
+            return "pii"
+    return "none"
 
 
 def _parse_snapshot(text: str) -> tuple[list[UIElement], dict[str, str], list[int | None]]:
@@ -212,7 +234,8 @@ class WebSurface:
     """Playwright-backed Surface, launched headed (CLAUDE.md requires it for the Phase 10
     escalation handoff, so it is never switched to headless for convenience)."""
 
-    def __init__(self, headless: bool = False) -> None:
+    def __init__(self, policy: Policy | None = None, headless: bool = False) -> None:
+        self._policy = policy
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=headless)
         self._page = self._browser.new_page()
@@ -225,8 +248,46 @@ class WebSurface:
         self.dialog_events: list[dict[str, Any]] = []
         self._page.on("dialog", self._on_dialog)
 
+        # Navigation guard, installed only when a policy is given (a policy-less WebSurface has
+        # nothing to check against). BOTH handlers are required, for a reason
+        # that is not obvious: Chromium does NOT create a Route for a redirect hop (verified in
+        # Playwright's own source, crNetworkManager.ts: "We do not support intercepting
+        # redirects", and in its test suite, page-network-request.spec.ts: "should not work for
+        # a redirect and interception"). page.route (a) therefore blocks an INITIAL navigation
+        # request -- a meta-refresh, a window.open, a clicked external link -- but cannot block
+        # a server-side 302; the page.on("request") listener (b) is what observes that 302 after
+        # the fact, so the run can still be aborted at the gate once it has happened.
+        self.navigation_violations: list[str] = []
+        if policy is not None:
+            self._page.route("**/*", self._on_route)
+            self._page.on("request", self._on_navigation_request)
+
     def _on_dialog(self, dialog: Any) -> None:
         self.dialog_events.append({"dialog_type": dialog.type, "message": dialog.message})
+
+    def _record_violation(self, url: str) -> None:
+        if url not in self.navigation_violations:
+            self.navigation_violations.append(url)
+
+    def _on_route(self, route: Any) -> None:
+        request = route.request
+        if (
+            self._policy is not None
+            and request.is_navigation_request()
+            and not self._policy.allows_url(request.url)
+        ):
+            self._record_violation(request.url)
+            route.abort("blockedbyclient")
+            return
+        route.continue_()
+
+    def _on_navigation_request(self, request: Any) -> None:
+        if (
+            self._policy is not None
+            and request.is_navigation_request()
+            and not self._policy.allows_url(request.url)
+        ):
+            self._record_violation(request.url)
 
     def _frame_segment(self, ref: str, cache: dict[str, str]) -> str:
         """The segment an `iframe` element contributes to a descendant's frame_path: the live
@@ -267,30 +328,53 @@ class WebSurface:
 
     def _resolve_attr_names(self, elements: list[UIElement], refs: dict[str, str]) -> None:
         """ADR 0004, ladder step 4: placeholder, then the name attribute, read through the
-        element's own ref. Last resort -- only elements still unnamed after a11y and table
-        structure, only interactive roles, and capped, because each check is a round trip.
+        element's own ref, plus (Phase 5) the type/autocomplete/id attributes sensitivity needs.
+        One round trip per interactive element, capped, because each check costs a round trip.
+
+        Changed in Phase 5: this used to `continue` past any element that already had a name, on
+        the theory that naming was the only thing this method did. Sensitivity now has to be
+        resolved for EVERY interactive element regardless, because this app's password field
+        already gets name="Password" from _derive_structural_names (the row-label rule) before
+        this method ever runs -- if the skip condition still included `element.name`, the
+        password field's `type="password"` would never be read at all, and the strongest, most
+        structural sensitivity signal this system has would be silently lost for exactly the
+        field it matters most for. The cap and the "only ASSIGN a name if one is missing" rule are
+        both unchanged.
         """
         attempts = 0
         for element in elements:
             if attempts >= _ATTR_NAME_CAP:
                 break
-            if element.name or element.role not in _INTERACTIVE_ROLES:
+            if element.role not in _INTERACTIVE_ROLES:
                 continue
             ref = refs.get(element.node_id)
             if ref is None:
                 continue
             attempts += 1
             attrs = self._page.locator(f"aria-ref={ref}").evaluate(
-                "el => ({p: el.placeholder || '', n: el.getAttribute('name') || ''})"
+                "el => ({p: el.placeholder || '', n: el.getAttribute('name') || '', "
+                "t: el.type || '', a: el.autocomplete || '', id: el.id || ''})"
             )
             placeholder = attrs.get("p") or ""
             name_attr = attrs.get("n") or ""
-            if placeholder:
-                element.name = placeholder
-                element.name_source = "attr_name"
-            elif name_attr:
-                element.name = name_attr
-                element.name_source = "attr_name"
+            input_type = attrs.get("t") or ""
+            autocomplete = attrs.get("a") or ""
+            element_id = attrs.get("id") or ""
+
+            if not element.name:
+                if placeholder:
+                    element.name = placeholder
+                    element.name_source = "attr_name"
+                elif name_attr:
+                    element.name = name_attr
+                    element.name_source = "attr_name"
+
+            if input_type == "password":
+                element.sensitivity = "secret"  # structural: the strongest signal there is
+            else:
+                element.sensitivity = _match_sensitivity(
+                    (element.name, name_attr, element_id, autocomplete), self._policy
+                )
 
     def _attach_ancestors(self, elements: list[UIElement], parents: list[int | None]) -> None:
         """DP over parents: each element's ancestors is its parent plus the parent's own
@@ -385,9 +469,35 @@ class WebSurface:
             frame.wait_for_load_state("load")
         self._page.wait_for_load_state("load")
 
-    def screenshot(self, path: Path) -> None:
-        """Raw PNG bytes this phase; Phase 5 masks them using aria_snapshot(boxes=True)."""
-        self._page.screenshot(path=str(path))
+    @property
+    def url(self) -> str:
+        return self._page.url
+
+    def screenshot_bytes(self) -> bytes:
+        """Raw PNG bytes. Masking happens one layer up, in EvidenceLogger.screenshot -- this
+        method never writes anything itself, so there is exactly one place PNG bytes hit disk
+        (safety/redact.py's redact_screenshot, called from evidence/logger.py).
+
+        `page.screenshot()` captures the viewport at deviceScaleFactor 1 (this app never sets
+        it otherwise), so PNG pixels equal CSS pixels and an element's `bounding_box()` lands on
+        the right pixels directly; a non-default scale factor would need those coordinates
+        scaled before drawing a mask.
+        """
+        result: bytes = self._page.screenshot()
+        return result
+
+    def fill_bounds(self, elements: list[UIElement]) -> None:
+        """Resolve a live bounding box for each of the given elements, through their aria-ref.
+        Called ONLY for elements a caller already knows are sensitive (never for a whole
+        observation), so perception itself stays cheap -- most elements never pay this cost.
+        """
+        for element in elements:
+            ref = self._index_to_ref.get(element.node_id)
+            if ref is None:
+                continue
+            box = self._page.locator(f"aria-ref={ref}").bounding_box()
+            if box is not None:
+                element.bounds = [box["x"], box["y"], box["width"], box["height"]]
 
     def close(self) -> None:
         self._browser.close()

@@ -16,6 +16,7 @@ dependencies = [
     "pyyaml",
     "google-genai",
     "flask",
+    "pillow",
 ]
 
 [project.optional-dependencies]

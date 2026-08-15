@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -20,9 +21,15 @@ class UIElement(BaseModel):
     name: str = ""
     value: str | None = None
     states: list[str] = Field(default_factory=list)
-    # Bounds stay None this phase. Phase 5 turns on aria_snapshot(boxes=True) so screenshots
-    # can be masked before the PNG bytes are written.
+    # Bounds stay None unless something actually needs them for this element (surface/web.py's
+    # fill_bounds is only ever called for elements already known to be sensitive), so perception
+    # itself stays cheap -- see docs/adr/0008-field-sensitivity-redaction.md.
     bounds: list[float] | None = None
+    # Data-driven, not inferred from prose (docs/adr/0008): "secret" for a structural password
+    # field or a name/attribute matching policy.sensitive_fields.secret, "pii" for a match against
+    # policy.sensitive_fields.pii, "none" otherwise. Populated during perception
+    # (surface/web.py's _resolve_attr_names), never guessed from a rationale string.
+    sensitivity: Literal["none", "secret", "pii"] = "none"
     # Nesting depth in the accessibility tree. This is the only thing that distinguishes two
     # nameless fields sitting in different table rows (see render() below), so it is carried
     # on the element rather than reconstructed from the raw tree text at render time.

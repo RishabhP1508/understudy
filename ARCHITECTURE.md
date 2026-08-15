@@ -196,3 +196,61 @@ raises an error instead of going quietly dormant.
 39. Replay returns a failure when the success checkpoint does not hold. Why: it previously returned
     Success with `checkpoint_verified: false` and exit code 0, so a replay that did not achieve its
     goal reported success. The checkpoint is what decides, or it is decoration.
+
+## Phase 5 decisions
+
+40. Policy is a typed Pydantic model, loaded by one function (`safety/policy.load_policy`), and
+    the stub `config.load_policy` is deleted. Why: `replay/engine.py` must not import
+    `understudy.config` (invariant 1's neighbourhood), and a policy read as a plain dict would
+    have pushed every field name and default back into whichever module happened to read it
+    first, instead of into one schema a reviewer can read as code.
+41. `PolicyGate.dispatch` raises on refusal instead of returning a sentinel. Why: its return type
+    is `str | None` (the `ReadText` result), so a sentinel refusal value would be silently
+    ignorable at the one call site that matters most. Three sibling exception types --
+    `PolicyDenied`, `EscalationRequired`, `NavigationBlocked` -- carry the decision or the
+    offending URLs, and are siblings rather than a hierarchy because discovery, replay, and the
+    CLI handle each of the three differently. See
+    `docs/adr/0007-block-risky-actions-rather-than-confirm.md`.
+42. Risk classification runs two independent layers, label then route, first match wins, and the
+    route layer exists because the label layer is a measured heuristic with a demonstrated blind
+    spot on this fixture's own "Submit" button. See `docs/adr/0007`.
+43. Sensitivity is a field on `UIElement`, set during perception from two structural/data-driven
+    signals (`type="password"`, then a policy pattern match), never inferred from a rationale
+    string. Why: prose is for a human to read; deciding what is secret by scanning prose for a
+    keyword is the exact rule that redacted "Enter the password to log in" in Phase 2. See
+    `docs/adr/0008-field-sensitivity-redaction.md`.
+44. The web navigation guard is two handlers, not one: `page.route` blocks an initial off-allowlist
+    navigation request before it starts, and `page.on("request")` separately records a redirect hop
+    Chromium never surfaces as an interceptable `Route` at all (verified in Playwright's own
+    source and test suite). Why: either handler alone misses one of the two ways this app's own
+    `/external` route can leave the allowlist -- a direct navigation, and a server-side 302 -- and
+    the second one is exactly how a real escape would happen in practice.
+45. Redaction gained a fourth rule (a bare, no-whitespace, NOT-purely-alphabetic credential-shaped
+    literal is redacted whole) and a field-level mechanism (a dict carrying its own
+    `"sensitivity"` marks which of its keys to replace). Why: applied without the alphabetic
+    exclusion, the same literal rule that catches `SECRET_SENTINEL_VALUE` also nukes this
+    fixture's own password field's caption ("Password" is a bare string containing the token
+    "password" too), corrupting a `TargetDescriptor` for no safety benefit -- a caption is not a
+    secret. The exclusion is a property of the string's own shape, not of which dict key or list
+    position it sits in, on purpose: a key-keyed exemption was tried first and broke the moment
+    the same caption appeared inside `TargetDescriptor.scope`, a list with no key at all. See
+    `docs/adr/0008`.
+46. A sensitive element's live bounding box is resolved lazily, only for elements a redaction check
+    has already flagged, never for a whole observation. Why: perception stays cheap by default, and
+    the cost of a `bounding_box()` round trip is paid only where a screenshot is actually about to
+    be masked.
+47. A screenshot is taken right after `observe()` and before the action it will accompany, using
+    that same observation, in both discovery and replay's failure path. Why: masking positions a
+    box using an observation's element bounds, and a stale observation describes pixels from a
+    different moment than the ones the screenshot shows -- painting a mask in the wrong place is a
+    leak, not a cosmetic bug.
+48. `Capability` carries a `status` (`"draft" | "approved"`). A `RISKY_IRREVERSIBLE` step only
+    replays when the artifact's own status is `"approved"` AND the caller separately passes
+    `allow_risky=True`. Why: approval travels with the artifact a human actually reviewed, and a
+    separate per-invocation flag means approving a capability once does not silently arm every
+    future replay of it forever.
+49. The evidence log has one event shape for a dispatched action, `policy_decision`, carrying an
+    `allowed` field, not two event names for "did it" and "refused it." Why: a refusal and an
+    action are the same decision with a different outcome, and `record/recorder.py` needs exactly
+    one predicate (`decision.allowed is True`) to know which events became `Step`s, not two event
+    names to keep in sync.
