@@ -1,6 +1,6 @@
 # Stub only. Phase 5 fills this in with real allowlist, risk, and limit values.
 version: 1
-entry_point: http://127.0.0.1:8000/
+entry_point: http://127.0.0.1:5055/login
 allowlist:
   domains: []
   routes: []
@@ -8,5 +8,5 @@ allowlist:
 risk:
   irreversible: []
 limits:
-  max_steps: 0
-  timeout_seconds: 0
+  max_steps: 25
+  timeout_seconds: 180

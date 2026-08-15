@@ -1,0 +1,10 @@
+{"ts": "2026-08-15T00:33:38.519429+00:00", "type": "replay_start", "capability_id": "look-up-member-12345-and-read-their-current-savings-balance", "version": 1, "params": {}}
+{"ts": "2026-08-15T00:33:38.519429+00:00", "type": "dispatch", "action": {"kind": "navigate", "url": "http://127.0.0.1:5055/login"}, "context": {"tool": "navigate", "rationale": "open the capability's recorded entry point"}}
+{"ts": "2026-08-15T00:33:38.605725+00:00", "type": "dispatch", "action": {"kind": "type", "node_id": "11", "text": "admin"}, "context": {"tool": "type", "rationale": "Enter username to log into the back office system."}}
+{"ts": "2026-08-15T00:33:38.633639+00:00", "type": "dispatch", "action": {"kind": "type", "node_id": "15", "text": "admin"}, "context": {"tool": "type", "rationale": "[REDACTED]"}}
+{"ts": "2026-08-15T00:33:38.651228+00:00", "type": "dispatch", "action": {"kind": "click", "node_id": "18"}, "context": {"tool": "click", "rationale": "Click Login button to authenticate."}}
+{"ts": "2026-08-15T00:33:38.780931+00:00", "type": "dispatch", "action": {"kind": "type", "node_id": "21", "text": "12345"}, "context": {"tool": "type", "rationale": "Enter member ID 12345 into the search textbox."}}
+{"ts": "2026-08-15T00:33:38.806959+00:00", "type": "dispatch", "action": {"kind": "click", "node_id": "23"}, "context": {"tool": "click", "rationale": "Click Search to look up member 12345."}}
+{"ts": "2026-08-15T00:33:38.873583+00:00", "type": "dispatch", "action": {"kind": "click", "node_id": "27"}, "context": {"tool": "click", "rationale": "Click the member result link to view member details."}}
+{"ts": "2026-08-15T00:33:38.957693+00:00", "type": "dispatch", "action": {"kind": "read_text", "node_id": "34"}, "context": {"tool": "extract", "rationale": "Extract the current savings balance of member 12345 as requested by the goal."}}
+{"ts": "2026-08-15T00:33:38.971975+00:00", "type": "replay_end", "checkpoint_verified": true, "outputs": {"savings_balance": "$1,204.55"}}

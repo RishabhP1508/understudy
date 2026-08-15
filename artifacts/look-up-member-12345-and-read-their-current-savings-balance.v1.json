@@ -1,0 +1,117 @@
+{
+  "schema_version": 1,
+  "capability_id": "look-up-member-12345-and-read-their-current-savings-balance",
+  "version": 1,
+  "name": "look up member 12345 and read their current savings balance",
+  "description": "look up member 12345 and read their current savings balance",
+  "target": {
+    "entry_point": "http://127.0.0.1:5055/login",
+    "surface_kind": "web"
+  },
+  "inputs": [],
+  "outputs": [
+    {
+      "name": "savings_balance",
+      "type": "string",
+      "description": "Extracting the savings balance."
+    }
+  ],
+  "steps": [
+    {
+      "index": 0,
+      "action": "type",
+      "target": {
+        "role": "textbox",
+        "name": "",
+        "ordinal": 0
+      },
+      "value": "admin",
+      "rationale": "Entering username.",
+      "postcondition": null
+    },
+    {
+      "index": 1,
+      "action": "type",
+      "target": {
+        "role": "textbox",
+        "name": "",
+        "ordinal": 1
+      },
+      "value": "[REDACTED]",
+      "rationale": "[REDACTED]",
+      "postcondition": null
+    },
+    {
+      "index": 2,
+      "action": "click",
+      "target": {
+        "role": "button",
+        "name": "Login",
+        "ordinal": null
+      },
+      "value": null,
+      "rationale": "Clicking Login button.",
+      "postcondition": null
+    },
+    {
+      "index": 3,
+      "action": "type",
+      "target": {
+        "role": "textbox",
+        "name": "",
+        "ordinal": null
+      },
+      "value": "12345",
+      "rationale": "Entering Member ID 12345.",
+      "postcondition": null
+    },
+    {
+      "index": 4,
+      "action": "click",
+      "target": {
+        "role": "button",
+        "name": "Search",
+        "ordinal": null
+      },
+      "value": null,
+      "rationale": "Clicking Search button.",
+      "postcondition": null
+    },
+    {
+      "index": 5,
+      "action": "click",
+      "target": {
+        "role": "link",
+        "name": "12345 - Testuser Alpha",
+        "ordinal": null
+      },
+      "value": null,
+      "rationale": "Clicking the member link to view details.",
+      "postcondition": null
+    },
+    {
+      "index": 6,
+      "action": "extract",
+      "target": {
+        "role": "generic",
+        "name": "",
+        "ordinal": 2
+      },
+      "value": "savings_balance",
+      "rationale": "Extracting the savings balance.",
+      "postcondition": null
+    }
+  ],
+  "success": {
+    "kind": "text_present",
+    "target": "page",
+    "value": "$1,204.55"
+  },
+  "provenance": {
+    "created_at": "2026-08-15T00:50:46.099808+00:00",
+    "model": "gemini-3.1-flash-lite",
+    "run_id": "3348784c8a88",
+    "transcript_hash": "9e190f8669b375668db69a227d1b7ad9b46b7dae4f39529d6a636dbfd61707c0",
+    "understudy_version": "0.1.0"
+  }
+}

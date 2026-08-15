@@ -128,3 +128,25 @@ raises an error instead of going quietly dormant.
 24. `discover` takes `--goal` and `--target` as separate inputs. `--target` defaults to the policy's
     `entry_point`, and the resolved value is echoed. Why: the target is an input to the capability,
     not deployment config, and echoing it makes the default visible in the run record.
+
+## Phase 2 decisions
+
+25. Perception is one `page.aria_snapshot(mode="ai")` per step, parsed into a flat indexed element
+    list. Why: measured against the fixture, a single call crosses the frameset and the depth-2
+    iframe and reaches the savings balance, so frame traversal needs no code at all. See
+    `docs/adr/0002-accessibility-tree-over-screenshots.md`.
+26. The model addresses an element by the `[index]` it was shown; the surface maps that to a live
+    `aria-ref` handle. Recorded steps store role plus accessible name plus an ordinal, never a ref.
+    Why: refs are regenerated on every snapshot (measured: the same nodes moved from `f1e1` to
+    `f6e1` across one reload), so a ref in an artifact would be a guaranteed replay failure. The
+    ordinal exists because this app's login and search fields have no accessible name at all, and
+    without it replay could not address them. Phase 4 replaces it with the ranked strategy list.
+27. Checkpoint semantics live in one pure function, `checkpoint_satisfied(observation, checkpoint)`,
+    imported by both the discovery loop and the replay engine. Why: if discovery verified a goal by
+    one rule and replay by another, the claim that replay reproduces discovery would be false. One
+    definition makes drift impossible rather than unlikely.
+28. Every tool in the agent's schema requires a `rationale` argument. Why: R5 makes the "why"
+    mandatory, and requiring it at the schema level means an action without a reason cannot be
+    expressed, rather than being caught later by review.
+29. The default model is `gemini-3.1-flash-lite`, overridable with `GEMINI_MODEL`. Why: measured
+    quota, not preference. See `docs/adr/0003-model-choice-and-free-tier-quota.md`.
