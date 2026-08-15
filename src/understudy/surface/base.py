@@ -55,6 +55,9 @@ Action = Annotated[
 class Surface(Protocol):
     """Perception and action, nothing else. No CSS, no raw HTML, no direct browser handle."""
 
+    @property
+    def url(self) -> str: ...
+
     def observe(self) -> Observation: ...
 
     def act(self, action: Action) -> str | None: ...

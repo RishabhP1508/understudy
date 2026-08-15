@@ -50,9 +50,20 @@ Concept-by-concept mapping, browser (Playwright/Chromium accessibility tree) -> 
              inline value only when the snapshot line has one.
 
 - bounds
-    Web:     None this phase; Phase 5 turns on `aria_snapshot(boxes=True)`.
+    Web:     `bounding_box()` on the element's live `aria-ref` locator, resolved lazily and only
+             for elements a redaction check has already flagged sensitive (surface/web.py's
+             fill_bounds).
     Desktop: `AutomationElement.Current.BoundingRectangle`, a screen-space rectangle UIA always
              exposes. Cleaner than the web case, where a box has to be explicitly requested.
+
+- url
+    Web:     `page.url`, the current top-level document's URL; the allowlist origin/route check
+             matches straight against it.
+    Desktop: no per-element URL exists on Win32. The nearest analogue is the foreground
+             `Window` element's process executable path plus its title/class, and an allowlist for
+             desktop would need to be keyed on that pair instead of scheme+origin -- a different
+             shape from the web case, not a drop-in substitute, which is why this is called out
+             rather than assumed to just work.
 
 - Click
     Web:     `page.locator("aria-ref=...").click()`, a real synthesized input event.
@@ -130,6 +141,13 @@ class DesktopSurface:
     is not web-specific by construction, not to run anything; see the module docstring for the
     concept-by-concept mapping that a real implementation would follow.
     """
+
+    @property
+    def url(self) -> str:
+        raise NotImplementedError(
+            "desktop has no per-element URL; see this module's docstring for the nearest "
+            "analogue (foreground window executable path plus title/class)"
+        )
 
     def observe(self) -> Observation:
         raise NotImplementedError(

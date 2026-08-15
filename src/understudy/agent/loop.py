@@ -18,10 +18,10 @@ from understudy.agent.tools import ALL_TOOLS
 from understudy.evidence.logger import EvidenceLogger
 from understudy.llm.base import LLMClient
 from understudy.models.artifact import Checkpoint, checkpoint_satisfied
-from understudy.models.observation import Observation
-from understudy.safety.policy import PolicyGate
+from understudy.models.observation import Observation, UIElement
+from understudy.safety.policy import PolicyDenied, PolicyGate
 from understudy.surface.base import Action, Click, Navigate, ReadText, Surface, Type
-from understudy.surface.locator import TargetDescriptor, describe
+from understudy.surface.locator import describe
 
 
 class RunOutcome(BaseModel):
@@ -48,13 +48,6 @@ def verify_checkpoint(surface: Surface, checkpoint: dict[str, Any] | Checkpoint)
     return checkpoint_satisfied(surface.observe(), checkpoint)
 
 
-def _describe_target(observation: Observation, index: int) -> TargetDescriptor:
-    # docs/adr/0006: describe() captures the full ranked-signal descriptor (scope, relational
-    # hint, ordinal only as a tiebreaker), not just role+name+ordinal, so a recorded step gives
-    # replay's resolve() more than one way to find the element again.
-    return describe(observation.elements[index], observation)
-
-
 def _index_to_node_id(observation: Observation, index: Any) -> str:
     is_plain_int = isinstance(index, int) and not isinstance(index, bool)
     if not is_plain_int or not 0 <= index < len(observation.elements):
@@ -62,11 +55,17 @@ def _index_to_node_id(observation: Observation, index: Any) -> str:
     return observation.elements[index].node_id
 
 
-def _screenshot_safely(logger: EvidenceLogger, surface: Surface, step: int) -> None:
+def _screenshot_safely(
+    logger: EvidenceLogger, surface: Surface, step: int, observation: Observation
+) -> None:
     # R5: at least one richer signal per step. A screenshot failure (browser closed mid-run,
-    # a fake surface with no screenshot() in tests, etc.) must never abort a real discovery run.
+    # a fake surface with no screenshot_bytes() in tests, etc.) must never abort a real discovery
+    # run. `observation` is passed by the caller and must describe the CURRENT page -- taken
+    # right after surface.observe() and before any action, per D7: masking positions a box from
+    # an observation's element bounds, and a stale observation would paint that box over pixels
+    # from a different moment, which is a leak, not a cosmetic bug.
     try:
-        logger.screenshot(surface, step)
+        logger.screenshot(surface, step, observation=observation)
     except Exception as exc:
         logger.event("screenshot_failed", step=step, reason=str(exc))
 
@@ -108,7 +107,11 @@ def run(
         context={"tool": "navigate", "rationale": f"open the target to begin the goal: {goal}"},
     )
     steps_executed += 1
-    _screenshot_safely(logger, surface, rounds)
+    # No pre-navigation observation exists to protect (the browser starts blank), so the
+    # bootstrap step observes once, immediately after the navigate completes, and uses that
+    # fresh observation for its own screenshot -- the same "observe, then screenshot" order as
+    # every round below, just with the one action that has no prior page to describe.
+    _screenshot_safely(logger, surface, rounds, surface.observe())
 
     while True:
         if rounds >= max_steps:
@@ -136,6 +139,7 @@ def run(
 
         rounds += 1
         observation = surface.observe()
+        _screenshot_safely(logger, surface, rounds, observation)
 
         new_dialogs = getattr(surface, "dialog_events", [])[seen_dialogs:]
         for dialog in new_dialogs:
@@ -200,14 +204,35 @@ def run(
             continue
 
         context: dict[str, Any] = {"tool": name, "rationale": args.get("rationale")}
+        element: UIElement | None = None
         if name in ("click", "type", "read", "extract"):
-            context["target"] = _describe_target(observation, args["index"]).model_dump()
+            element = observation.elements[args["index"]]
+            context["target"] = describe(element, observation).model_dump()
         if name == "extract":
             context["output_name"] = args.get("output_name")
 
-        result_text = gate.dispatch(surface, action, context=context)
+        try:
+            result_text = gate.dispatch(surface, action, context=context, element=element)
+        except PolicyDenied as exc:
+            # Whether a policy denial should instead be a STOP condition for the whole run, not
+            # just a rejected turn the model gets to try again after, is Phase 7's call and is
+            # deliberately not settled here. EscalationRequired and NavigationBlocked are NOT
+            # caught: a risky action needs a human (Phase 10), and a navigation that escaped the
+            # allowlist means the session state is no longer trustworthy, so both propagate and
+            # end the run rather than being retried.
+            rejected_turns += 1
+            logger.event(
+                "rejected_turn", reason=exc.decision.reason, tool=name, rule=exc.decision.rule
+            )
+            messages.append(
+                {
+                    "role": "tool",
+                    "name": name,
+                    "response": {"error": f"action refused by policy: {exc.decision.reason}"},
+                }
+            )
+            continue
         steps_executed += 1
-        _screenshot_safely(logger, surface, rounds)
 
         if name == "extract" and args.get("output_name"):
             outputs[args["output_name"]] = result_text or ""

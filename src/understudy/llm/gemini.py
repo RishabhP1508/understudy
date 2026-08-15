@@ -22,7 +22,7 @@ from __future__ import annotations
 import os
 import random
 import time
-from typing import Any
+from typing import Any, cast
 
 from google import genai
 from google.genai import errors, types
@@ -51,7 +51,16 @@ class GeminiClient:
     def complete(
         self, system: str, messages: list[dict[str, Any]], tools: list[dict[str, Any]]
     ) -> LLMResponse:
-        contents = [self._to_content(message) for message in messages]
+        # A plain `list[types.Content]` (what this comprehension infers to on its own) does not
+        # typecheck against `generate_content`'s declared `contents` parameter type (verified via
+        # inspect.signature: a large Union whose list arms are `list[Content | ContentDict | ...]`)
+        # because list is invariant -- mypy does not widen a list comprehension's inferred element
+        # type to match a Union-typed target the way it sometimes can for a list literal. The
+        # runtime value is unchanged: `cast` has no effect at runtime, it only tells the type
+        # checker this list satisfies the SDK's own declared type for this parameter.
+        contents = cast(
+            "types.ContentListUnionDict", [self._to_content(message) for message in messages]
+        )
         config = types.GenerateContentConfig(
             system_instruction=system,
             tools=[

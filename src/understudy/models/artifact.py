@@ -86,3 +86,8 @@ class Capability(BaseModel):
     steps: list[Step]
     success: Checkpoint
     provenance: Provenance
+    # "draft" until a human reviews it; replay only executes a RISKY_IRREVERSIBLE step when the
+    # capability is "approved" AND the caller passes allow_risky=True at replay() (safety/policy.py
+    # PolicyGate.dispatch). Recorded here, not passed as a bare replay() argument alone, so the
+    # approval travels with the artifact a human actually reviewed.
+    status: Literal["draft", "approved"] = "draft"

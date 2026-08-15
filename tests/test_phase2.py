@@ -9,8 +9,33 @@ from understudy.agent.loop import run
 from understudy.evidence.logger import EvidenceLogger
 from understudy.llm.base import LLMResponse, ToolCall
 from understudy.models.observation import Observation, UIElement
-from understudy.safety.policy import PolicyGate
+from understudy.safety.policy import Policy, PolicyGate
 from understudy.surface.base import Action
+
+
+def _permissive_policy() -> Policy:
+    """A test Policy permissive enough that the bootstrap navigate to http://fake/start (and any
+    action against the http://fake/ fakes below) passes the allowlist, action-type, and role
+    checks -- these tests exercise the loop's own control flow, not the gate's refusal paths (see
+    tests/test_phase5.py for those)."""
+    return Policy(
+        version=1,
+        app_id="test",
+        entry_point="http://fake/start",
+        allowed_origins=["http://fake"],
+        allowed_routes=["/*"],
+        allowed_actions=["navigate", "click", "type", "select", "read_text"],
+        allowed_roles=[
+            "textbox",
+            "searchbox",
+            "combobox",
+            "button",
+            "link",
+            "checkbox",
+            "radio",
+            "option",
+        ],
+    )
 
 
 class _FakeSurface:
@@ -19,6 +44,10 @@ class _FakeSurface:
     def __init__(self) -> None:
         self.dialog_events: list[dict[str, Any]] = []
         self.acted: list[Action] = []
+
+    @property
+    def url(self) -> str:
+        return "http://fake/"
 
     def observe(self) -> Observation:
         return Observation(
@@ -50,6 +79,10 @@ class _VerifiableSurface:
     def __init__(self) -> None:
         self.dialog_events: list[dict[str, Any]] = []
         self.acted: list[Action] = []
+
+    @property
+    def url(self) -> str:
+        return "http://fake/"
 
     def observe(self) -> Observation:
         return Observation(
@@ -91,7 +124,7 @@ def test_no_tool_call_turn_is_not_appended_as_a_zero_part_model_message(tmp_path
     surface = _VerifiableSurface()
     llm = _NoToolCallThenFinishLLM()
     logger = EvidenceLogger("test", "phase2-no-tool-call", base_dir=tmp_path)
-    gate = PolicyGate(logger)
+    gate = PolicyGate(_permissive_policy(), logger)
 
     outcome = run(
         goal="reach the DONE_TOKEN state",
@@ -118,7 +151,7 @@ def test_false_checkpoint_does_not_terminate_the_run(tmp_path: Path) -> None:
     surface = _FakeSurface()
     llm = _FakeLLM()
     logger = EvidenceLogger("test", "phase2-false-checkpoint", base_dir=tmp_path)
-    gate = PolicyGate(logger)
+    gate = PolicyGate(_permissive_policy(), logger)
 
     outcome = run(
         goal="reach a state that never happens",
