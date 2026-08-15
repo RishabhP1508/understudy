@@ -21,7 +21,7 @@ from understudy.models.artifact import Checkpoint, checkpoint_satisfied
 from understudy.models.observation import Observation
 from understudy.safety.policy import PolicyGate
 from understudy.surface.base import Action, Click, Navigate, ReadText, Surface, Type
-from understudy.surface.locator import TargetDescriptor
+from understudy.surface.locator import TargetDescriptor, describe
 
 
 class RunOutcome(BaseModel):
@@ -49,16 +49,10 @@ def verify_checkpoint(surface: Surface, checkpoint: dict[str, Any] | Checkpoint)
 
 
 def _describe_target(observation: Observation, index: int) -> TargetDescriptor:
-    element = observation.elements[index]
-    same_role_and_name = [
-        candidate
-        for candidate in observation.elements
-        if candidate.role == element.role and candidate.name == element.name
-    ]
-    ordinal = None
-    if len(same_role_and_name) > 1:
-        ordinal = [candidate.node_id for candidate in same_role_and_name].index(element.node_id)
-    return TargetDescriptor(role=element.role, name=element.name, ordinal=ordinal)
+    # docs/adr/0006: describe() captures the full ranked-signal descriptor (scope, relational
+    # hint, ordinal only as a tiebreaker), not just role+name+ordinal, so a recorded step gives
+    # replay's resolve() more than one way to find the element again.
+    return describe(observation.elements[index], observation)
 
 
 def _index_to_node_id(observation: Observation, index: Any) -> str:
@@ -160,7 +154,12 @@ def run(
         if not response.tool_calls:
             rejected_turns += 1
             logger.event("rejected_turn", reason="no tool call returned", text=response.text)
-            messages.append({"role": "model", "tool_calls": []})
+            # Do not append a model turn here: an empty tool_calls list becomes
+            # types.Content(role="model", parts=[]) in llm/gemini.py's history conversion, and the
+            # Gemini API rejects zero-part content -- which would break the *next* call, not this
+            # one. Free-tier quota is 20 requests/day, so a run dying on the following turn is
+            # expensive. The rejected turn is already logged above; nothing needs to go in
+            # `messages` for a turn that produced no content.
             continue
 
         call = response.tool_calls[0]

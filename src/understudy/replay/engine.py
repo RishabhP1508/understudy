@@ -13,11 +13,11 @@ from pathlib import Path
 from typing import Any
 
 from understudy.evidence.logger import EvidenceLogger
-from understudy.models.artifact import Capability, Step, checkpoint_satisfied
+from understudy.models.artifact import Capability, Checkpoint, Step, checkpoint_satisfied
 from understudy.models.result import HardFailure, ReplayResult, Success
 from understudy.safety.policy import PolicyGate
 from understudy.surface.base import Action, Click, Navigate, ReadText, Select, Type
-from understudy.surface.locator import AmbiguousTarget, TargetNotFound, resolve
+from understudy.surface.locator import resolve
 from understudy.surface.web import WebSurface
 
 
@@ -42,6 +42,34 @@ def _screenshot_on_failure(logger: EvidenceLogger, surface: WebSurface, step_ind
         logger.screenshot(surface, step_index)
     except Exception as exc:
         logger.event("screenshot_failed", step=step_index, reason=str(exc))
+
+
+def _finish_result(
+    checkpoint_verified: bool,
+    success_checkpoint: Checkpoint,
+    outputs: dict[str, str],
+    steps_executed: int,
+) -> ReplayResult:
+    """The one decision replay's terminal step makes: did the recorded success checkpoint hold?
+
+    Pulled out as a pure function (no Surface, no logger) so the false branch -- every step
+    executed without raising, but the goal was never actually reached -- has a direct unit test.
+    Before this fix, replay returned Success(checkpoint_verified=False) here and cli.py only
+    exits non-zero on hard_failure, so a replay that did not achieve its goal printed "success"
+    and exited 0. The checkpoint is the one place "done" is decided (models/artifact.py), never
+    the model and never optimism, so a checkpoint that does not hold is a failed run, full stop.
+    """
+    if not checkpoint_verified:
+        return HardFailure(
+            step_index=steps_executed,
+            expected=f"success checkpoint: text {success_checkpoint.value!r} present "
+            f"on {success_checkpoint.target!r}",
+            observed="checkpoint text was not present in the final observation",
+            message="all steps executed but the success checkpoint did not verify",
+        )
+    return Success(
+        outputs=outputs, steps_executed=steps_executed, checkpoint_verified=checkpoint_verified
+    )
 
 
 def replay(artifact_path: Path, params: dict[str, Any], policy_path: Path) -> ReplayResult:
@@ -71,18 +99,25 @@ def replay(artifact_path: Path, params: dict[str, Any], policy_path: Path) -> Re
             observation = surface.observe()
             node_id: str | None = None
             if step.target is not None:
-                try:
-                    node_id = resolve(observation, step.target)
-                except (AmbiguousTarget, TargetNotFound) as exc:
-                    logger.event("hard_failure", step_index=step.index, reason=str(exc))
+                resolution = resolve(step.target, observation)
+                if resolution.element is None:
+                    # docs/adr/0006: a failed resolution reports every rung's candidate count,
+                    # not just "not found", so the failure is debuggable (R3).
+                    observed = "; ".join(
+                        f"{attempt.strategy.value}: {attempt.candidate_count} candidate(s)"
+                        + (f" ({attempt.skipped_reason})" if attempt.skipped_reason else "")
+                        for attempt in resolution.attempts
+                    )
+                    logger.event("hard_failure", step_index=step.index, reason=observed)
                     _screenshot_on_failure(logger, surface, step.index)
                     return HardFailure(
                         step_index=step.index,
                         expected=f"a unique element matching role={step.target.role!r} "
                         f"name={step.target.name!r}",
-                        observed=str(exc),
+                        observed=observed,
                         message=f"could not resolve the target for step {step.index}",
                     )
+                node_id = resolution.element.node_id
 
             try:
                 action = _action_for_step(step, node_id)
@@ -123,10 +158,9 @@ def replay(artifact_path: Path, params: dict[str, Any], policy_path: Path) -> Re
 
         checkpoint_verified = checkpoint_satisfied(surface.observe(), capability.success)
         logger.event("replay_end", checkpoint_verified=checkpoint_verified, outputs=outputs)
-        return Success(
-            outputs=outputs,
-            steps_executed=len(capability.steps),
-            checkpoint_verified=checkpoint_verified,
-        )
+        steps_executed = len(capability.steps)
+        if not checkpoint_verified:
+            _screenshot_on_failure(logger, surface, steps_executed)
+        return _finish_result(checkpoint_verified, capability.success, outputs, steps_executed)
     finally:
         surface.close()
