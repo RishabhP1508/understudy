@@ -72,6 +72,12 @@ class Provenance(BaseModel):
     run_id: str
     transcript_hash: str
     understudy_version: str
+    # Defaults to 1, meaning "recorded before this field existed" -- literally true of the one
+    # artifact in artifacts/, recorded under Phase 2 perception before Phase 3's name derivation
+    # and Phase 5's sensitivity. Never bumped or backfilled on that artifact: it is real evidence,
+    # not a value to edit. See docs/adr/0009 for how replay uses this to CLASSIFY a locator
+    # failure (stale_perception vs locator_unresolved), never to gate replay up front.
+    perception_version: int = 1
 
 
 class Capability(BaseModel):

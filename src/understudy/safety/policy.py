@@ -265,10 +265,20 @@ class PolicyGate:
             url=current_url,
             role=role,
         )
-        self._log(action, context, decision, element)
 
+        # Logged AFTER executing (not before, as the refusal branches above have to be), so the
+        # one "act" event for a dispatched action also carries its own result -- R5's "what the
+        # agent did" is stronger evidence once we know it actually happened. Logged in `except`
+        # or `else`, never after the whole block, so the event is written even when the
+        # `finally`'s own navigation check goes on to raise (the succeeded-but-then-violated
+        # case): otherwise that path would leave this dispatch with no act event at all.
         try:
             result = surface.act(action)
+        except Exception:
+            self._log(action, context, decision, element, act_result=None)
+            raise
+        else:
+            self._log(action, context, decision, element, act_result=result)
         finally:
             self._raise_if_navigation_violated(surface, include_current_url=True)
         return result
@@ -300,6 +310,7 @@ class PolicyGate:
         context: dict[str, Any],
         decision: PolicyDecision,
         element: UIElement | None,
+        act_result: str | None = None,
     ) -> None:
         if self._logger is None:
             return
@@ -312,9 +323,18 @@ class PolicyGate:
             elif element.sensitivity == "pii":
                 self._logger.redactor.register_secret(action.text)
                 action_dict["text"] = "[REDACTED]"
+        # `type="act"`: evidence/logger.py's RunEvent requires a real rationale on every event of
+        # this type (R5). `rationale` and `step_id` are promoted to their own named fields;
+        # `context` (tool name, resolved target descriptor, output name) rides along as-is for
+        # record/recorder.py, which still needs all three to rebuild a Step.
         self._logger.event(
-            "policy_decision",
-            action=action_dict,
+            "act",
+            phase="act",
+            step_id=context.get("step_id"),
+            proposed_action=action_dict,
+            rationale=context.get("rationale"),
+            policy_decision=decision.model_dump(),
+            dispatched=decision.allowed,
+            act_result=act_result,
             context=context,
-            decision=decision.model_dump(),
         )

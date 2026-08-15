@@ -1,15 +1,15 @@
 """build_capability: a separate pass over a written run.jsonl, producing a Capability.
 
 This reads the evidence log rather than any live object, so recording never depends on the
-discovery process still being in memory. Only ALLOWED `policy_decision` events become Steps: a
-refused one never reached surface.act, so it never happened as far as the recorded flow is
-concerned (Phase 5 renamed the event PolicyGate.dispatch logs from "dispatch" to
-"policy_decision" and gave it an `allowed` field precisely so a refusal and an action are the same
-event type, distinguished by that field, rather than needing two names). The harness's own
-bootstrap navigate to the target (always the first ALLOWED policy_decision event) is represented
-by target.entry_point instead, so it is not duplicated as a Step. Pruning and value
-parameterization (turning "12345" into a named input) are Phase 8 concerns; this phase records the
-literal values the run actually used.
+discovery process still being in memory. Only ALLOWED `act` events become Steps: a refused one
+never reached surface.act, so it never happened as far as the recorded flow is concerned (Phase 5
+renamed the event PolicyGate.dispatch logs from "dispatch" to "policy_decision" so a refusal and
+an action share one event type, distinguished by `allowed`; Phase 6 renamed the event type itself
+to "act" to match the fixed evidence schema in evidence/logger.py, and moved `allowed` under the
+event's own `policy_decision` field). The harness's own bootstrap navigate to the target (always
+the first ALLOWED act event) is represented by target.entry_point instead, so it is not
+duplicated as a Step. Pruning and value parameterization (turning "12345" into a named input) are
+Phase 8 concerns; this phase records the literal values the run actually used.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from pathlib import Path
 
 from understudy import __version__
 from understudy.models.artifact import Capability, Checkpoint, OutputSpec, Provenance, Step, Target
+from understudy.models.observation import PERCEPTION_VERSION
 from understudy.surface.locator import TargetDescriptor
 
 
@@ -43,8 +44,8 @@ def build_capability(
 
     for event in events:
         event_type = event.get("type")
-        if event_type == "policy_decision":
-            decision = event.get("decision") or {}
+        if event_type == "act":
+            decision = event.get("policy_decision") or {}
             if decision.get("allowed") is not True:
                 # A refused action was never dispatched to the surface; it cannot become a Step.
                 continue
@@ -54,7 +55,7 @@ def build_capability(
                 first_dispatch_seen = True
                 continue
 
-            action = event.get("action") or {}
+            action = event.get("proposed_action") or {}
             context = event.get("context") or {}
             tool = context.get("tool")
             is_extract = tool == "extract"
@@ -77,7 +78,7 @@ def build_capability(
                     action=action_kind,
                     target=target_desc,
                     value=value,
-                    rationale=context.get("rationale") or "",
+                    rationale=event.get("rationale") or "",
                     postcondition=None,
                 )
             )
@@ -86,11 +87,11 @@ def build_capability(
                     OutputSpec(
                         name=context["output_name"],
                         type="string",
-                        description=context.get("rationale") or "",
+                        description=event.get("rationale") or "",
                     )
                 )
         elif event_type == "goal_verified":
-            success = Checkpoint(**event["checkpoint"])
+            success = Checkpoint(**event["checkpoint_eval"])
 
     if success is None:
         raise ValueError("run.jsonl has no goal_verified event; cannot record a capability")
@@ -112,5 +113,6 @@ def build_capability(
             run_id=run_id,
             transcript_hash=transcript_hash,
             understudy_version=__version__,
+            perception_version=PERCEPTION_VERSION,
         ),
     )

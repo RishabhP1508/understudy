@@ -123,7 +123,7 @@ def test_no_tool_call_turn_is_not_appended_as_a_zero_part_model_message(tmp_path
     a message behind for the following call to send back."""
     surface = _VerifiableSurface()
     llm = _NoToolCallThenFinishLLM()
-    logger = EvidenceLogger("test", "phase2-no-tool-call", base_dir=tmp_path)
+    logger = EvidenceLogger("phase2-no-tool-call", "test", base_dir=tmp_path)
     gate = PolicyGate(_permissive_policy(), logger)
 
     outcome = run(
@@ -150,7 +150,7 @@ def test_no_tool_call_turn_is_not_appended_as_a_zero_part_model_message(tmp_path
 def test_false_checkpoint_does_not_terminate_the_run(tmp_path: Path) -> None:
     surface = _FakeSurface()
     llm = _FakeLLM()
-    logger = EvidenceLogger("test", "phase2-false-checkpoint", base_dir=tmp_path)
+    logger = EvidenceLogger("phase2-false-checkpoint", "test", base_dir=tmp_path)
     gate = PolicyGate(_permissive_policy(), logger)
 
     outcome = run(

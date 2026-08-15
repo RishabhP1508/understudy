@@ -54,6 +54,9 @@ def discover(
     policy: Annotated[
         Path, typer.Option("--policy", help="path to the policy YAML")
     ] = Path("policies/legacy_bank.yaml"),
+    evidence_dir: Annotated[
+        Path, typer.Option("--evidence-dir", help="base directory for run evidence")
+    ] = Path("evidence"),
 ) -> None:
     policy_obj = load_policy(policy)
     resolved_target = target or policy_obj.entry_point
@@ -68,7 +71,7 @@ def discover(
         raise typer.Exit(1)
 
     run_id = uuid.uuid4().hex[:12]
-    logger = EvidenceLogger("discovery", run_id)
+    logger = EvidenceLogger(run_id, "discovery", base_dir=evidence_dir)
     llm = GeminiClient(api_key=settings.gemini_api_key)
     gate = PolicyGate(policy_obj, logger, mode="discovery")
     surface = WebSurface(policy=policy_obj, headless=False)
@@ -77,6 +80,8 @@ def discover(
     timeout_s = policy_obj.max_wall_clock_seconds
 
     logger.event("run_start", goal=goal, target=resolved_target, run_id=run_id, model=llm.model)
+    logger.start_trace(surface)
+    outcome = None
     try:
         outcome = run(
             goal=goal,
@@ -105,8 +110,10 @@ def discover(
         typer.echo(f"discovery stopped by policy: {message}")
         raise typer.Exit(1) from None
     finally:
+        logger.stop_trace(surface, keep=(outcome is None or outcome.status != "goal_verified"))
         surface.close()
     logger.event("run_end", status=outcome.status, steps_executed=outcome.steps_executed)
+    logger.write_result(outcome)
 
     typer.echo(f"status: {outcome.status}")
     typer.echo(f"rounds: {outcome.rounds}")
@@ -154,9 +161,14 @@ def replay(
             ),
         ),
     ] = False,
+    evidence_dir: Annotated[
+        Path, typer.Option("--evidence-dir", help="base directory for run evidence")
+    ] = Path("evidence"),
 ) -> None:
     parsed_params = json.loads(params)
-    result = replay_engine.replay(artifact, parsed_params, policy, allow_risky=allow_risky)
+    result = replay_engine.replay(
+        artifact, parsed_params, policy, allow_risky=allow_risky, evidence_base_dir=evidence_dir
+    )
     typer.echo(Redactor().dumps(result, indent=2))
     if result.kind == "hard_failure":
         raise typer.Exit(1)

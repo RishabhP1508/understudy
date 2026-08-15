@@ -329,7 +329,7 @@ class _SecretFlowLLM:
 def _run_secret_flow(tmp_path: Path, run_id: str) -> tuple[EvidenceLogger, Any]:
     surface = _SecretFlowSurface()
     llm = _SecretFlowLLM()
-    logger = EvidenceLogger("test", run_id, base_dir=tmp_path)
+    logger = EvidenceLogger(run_id, "test", base_dir=tmp_path)
     policy = _permissive_policy()
     gate = PolicyGate(policy, logger, mode="discovery")
 
@@ -471,11 +471,14 @@ def test_every_policy_decision_is_logged_including_allows(tmp_path: Path) -> Non
         for line in (logger.dir / "run.jsonl").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
-    policy_events = [event for event in events if event.get("type") == "policy_decision"]
+    # Phase 6 renamed the event type PolicyGate.dispatch logs from "policy_decision" to "act" to
+    # match evidence/logger.py's fixed RunEvent schema, and moved the decision payload from a
+    # generic "decision" key to the event's own "policy_decision" field.
+    policy_events = [event for event in events if event.get("type") == "act"]
 
     assert policy_events  # the bootstrap navigate plus the type action, at least
-    assert all("decision" in event for event in policy_events)
-    assert any(event["decision"]["allowed"] is True for event in policy_events)
+    assert all("policy_decision" in event for event in policy_events)
+    assert any(event["policy_decision"]["allowed"] is True for event in policy_events)
 
 
 # ----------------------------------------------------------------------------------------

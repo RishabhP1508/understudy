@@ -9,7 +9,7 @@ tests/test_constraints.py (invariant 5) enforces that shape by walking loop.py's
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -56,18 +56,21 @@ def _index_to_node_id(observation: Observation, index: Any) -> str:
 
 
 def _screenshot_safely(
-    logger: EvidenceLogger, surface: Surface, step: int, observation: Observation
+    logger: EvidenceLogger,
+    surface: Surface,
+    step: int,
+    when: Literal["before", "after"],
+    observation: Observation,
 ) -> None:
     # R5: at least one richer signal per step. A screenshot failure (browser closed mid-run,
     # a fake surface with no screenshot_bytes() in tests, etc.) must never abort a real discovery
-    # run. `observation` is passed by the caller and must describe the CURRENT page -- taken
-    # right after surface.observe() and before any action, per D7: masking positions a box from
-    # an observation's element bounds, and a stale observation would paint that box over pixels
-    # from a different moment, which is a leak, not a cosmetic bug.
+    # run. `before` must describe the observation the decision was made from; `after` must
+    # describe a FRESH observation taken once the action has run (D7): masking `after` from the
+    # pre-action observation would paint a box over pixels that no longer match what changed.
     try:
-        logger.screenshot(surface, step, observation=observation)
+        logger.screenshot(surface, step, when, observation=observation)
     except Exception as exc:
-        logger.event("screenshot_failed", step=step, reason=str(exc))
+        logger.event("screenshot_failed", step_id=step, note=str(exc))
 
 
 def _build_action(name: str, args: dict[str, Any], observation: Observation) -> Action:
@@ -109,9 +112,9 @@ def run(
     steps_executed += 1
     # No pre-navigation observation exists to protect (the browser starts blank), so the
     # bootstrap step observes once, immediately after the navigate completes, and uses that
-    # fresh observation for its own screenshot -- the same "observe, then screenshot" order as
-    # every round below, just with the one action that has no prior page to describe.
-    _screenshot_safely(logger, surface, rounds, surface.observe())
+    # fresh observation for its own screenshot -- there is no "before" for the very first action,
+    # only an "after" (the same "observe, then screenshot" order as every round below).
+    _screenshot_safely(logger, surface, rounds, "after", surface.observe())
 
     while True:
         if rounds >= max_steps:
@@ -139,7 +142,7 @@ def run(
 
         rounds += 1
         observation = surface.observe()
-        _screenshot_safely(logger, surface, rounds, observation)
+        _screenshot_safely(logger, surface, rounds, "before", observation)
 
         new_dialogs = getattr(surface, "dialog_events", [])[seen_dialogs:]
         for dialog in new_dialogs:
@@ -154,6 +157,17 @@ def run(
         response = llm.complete(system=SYSTEM_PROMPT, messages=messages, tools=ALL_TOOLS)
         for key, value in response.usage.items():
             usage_totals[key] = usage_totals.get(key, 0) + value
+        # A crashed run still has every turn it completed, written incrementally, one line per
+        # turn, redacted the same way run.jsonl is (transcript.jsonl is discovery-only: replay
+        # has no model turns to record).
+        logger.transcript_turn(
+            {
+                "round": rounds,
+                "prompt": prompt_text,
+                "tool_calls": [{"name": c.name, "args": c.args} for c in response.tool_calls],
+                "text": response.text,
+            }
+        )
 
         if not response.tool_calls:
             rejected_turns += 1
@@ -176,7 +190,10 @@ def run(
             ok = isinstance(checkpoint, dict) and verify_checkpoint(surface, checkpoint)
             if ok:
                 logger.event(
-                    "goal_verified", checkpoint=checkpoint, rationale=args.get("rationale")
+                    "goal_verified",
+                    phase="verify",
+                    checkpoint_eval=checkpoint,
+                    rationale=args.get("rationale"),
                 )
                 return RunOutcome(
                     status="goal_verified",
@@ -189,10 +206,30 @@ def run(
                     usage=usage_totals,
                 )
             logger.event(
-                "rejected_completion", reason="checkpoint did not verify", checkpoint=checkpoint
+                "rejected_completion",
+                phase="verify",
+                note="checkpoint did not verify",
+                checkpoint_eval=checkpoint if isinstance(checkpoint, dict) else None,
             )
             messages.append({"role": "tool", "name": name, "response": {"verified": False}})
             # fall through and keep going; the model does not get to declare success
+            continue
+
+        rationale = args.get("rationale")
+        # R5 requires a rationale on every action event; a tool call missing one is treated as
+        # malformed, the same way a bad index is, rather than crashing the run on what the schema
+        # already marks `required` (the model's own tool call is not guaranteed to honour that at
+        # runtime). A LIVE model literally emitting the redaction sentinel is rejected here too --
+        # this is the one place "was this rationale ever real" can be judged against a live model
+        # turn; evidence/logger.py's RunEvent deliberately does not also reject it, because a
+        # historically-redacted rationale already baked into a real artifact (evidence's own
+        # non-negotiable discovery run) must still be able to replay.
+        if not isinstance(rationale, str) or not rationale.strip() or rationale == "[REDACTED]":
+            rejected_turns += 1
+            logger.event("rejected_turn", reason="tool call is missing a rationale", tool=name)
+            messages.append(
+                {"role": "tool", "name": name, "response": {"error": "a rationale is required"}}
+            )
             continue
 
         try:
@@ -203,7 +240,11 @@ def run(
             messages.append({"role": "tool", "name": name, "response": {"error": str(exc)}})
             continue
 
-        context: dict[str, Any] = {"tool": name, "rationale": args.get("rationale")}
+        # ponytail: no "step_id" key here (unlike replay/engine.py, which has a Step.index to
+        # give it). Discovery has no canonical step index until record/recorder.py assigns one
+        # after the fact by filtering allowed acts; RunEvent.step_id stays None for a discovery
+        # act event. Add real tracking here only if a consumer needs it before Phase 8 does.
+        context: dict[str, Any] = {"tool": name, "rationale": rationale}
         element: UIElement | None = None
         if name in ("click", "type", "read", "extract"):
             element = observation.elements[args["index"]]
@@ -238,3 +279,9 @@ def run(
             outputs[args["output_name"]] = result_text or ""
 
         messages.append({"role": "tool", "name": name, "response": {"result": result_text}})
+
+        # D7: the action just changed the page, so the 'after' screenshot needs a FRESH
+        # observation, never the pre-action `observation` above -- one extra observe() per acted
+        # round, the same cost replay's engine.py now pays per step.
+        after_observation = surface.observe()
+        _screenshot_safely(logger, surface, rounds, "after", after_observation)

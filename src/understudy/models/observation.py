@@ -14,6 +14,14 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+# Bumped whenever perception itself changes shape (a new derivation rule, a new signal) in a way
+# that can make a previously-recorded locator stop resolving even though the app did not change.
+# `Provenance.perception_version` on an artifact records what this constant was AT RECORD TIME;
+# replay/engine.py compares the two only to CLASSIFY a locator failure that already happened
+# (stale_perception vs locator_unresolved, docs/adr/0009), never as a pre-flight gate -- a
+# mismatch alone does not stop replay from attempting to resolve.
+PERCEPTION_VERSION = 2
+
 
 class UIElement(BaseModel):
     node_id: str
