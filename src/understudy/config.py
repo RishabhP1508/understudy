@@ -10,6 +10,25 @@ import yaml
 from pydantic import BaseModel
 
 
+def _load_dotenv(path: Path = Path(".env")) -> None:
+    """A tiny .env loader: if it exists, parse KEY=VALUE lines into the environment.
+
+    setdefault means a variable already set in the real environment always wins. No new
+    dependency: this is the only env file the project reads.
+    """
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        os.environ.setdefault(key.strip(), value.strip())
+
+
+_load_dotenv()
+
+
 class Settings(BaseModel):
     gemini_api_key: str | None = None
     policy_path: Path
