@@ -1,0 +1,3 @@
+{"ts": "2026-08-15T11:28:02.243162+00:00", "type": "replay_start", "capability_id": "look-up-member-12345-and-read-their-current-savings-balance", "version": 1, "params": {}}
+{"ts": "2026-08-15T11:28:02.243162+00:00", "type": "dispatch", "action": {"kind": "navigate", "url": "http://127.0.0.1:5055/login"}, "context": {"tool": "navigate", "rationale": "open the capability's recorded entry point"}}
+{"ts": "2026-08-15T11:28:02.319619+00:00", "type": "hard_failure", "step_index": 0, "reason": "no element matches role='textbox' name=''"}

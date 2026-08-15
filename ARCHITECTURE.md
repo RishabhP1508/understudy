@@ -150,3 +150,26 @@ raises an error instead of going quietly dormant.
     expressed, rather than being caught later by review.
 29. The default model is `gemini-3.1-flash-lite`, overridable with `GEMINI_MODEL`. Why: measured
     quota, not preference. See `docs/adr/0003-model-choice-and-free-tier-quota.md`.
+
+## Phase 3 decisions
+
+30. An unlabeled control gets its name from the surrounding table structure, and the strategy that
+    produced it is recorded as `name_source`. Why: this app has no `<label for=>` at all, so without
+    derivation the only way to address a field is its position. The rule climbs to the control's own
+    containing cell before reading the preceding sibling cell, because a backwards text scan
+    measurably returns "Savings" for the account-type dropdown instead of "Account Type". See
+    `docs/adr/0004-name-derivation-for-unlabeled-controls.md`.
+31. A derived name is always distinguishable from an authored one, because `name_source` travels
+    with the element. Why: an inferred name is weaker evidence than one the application actually
+    provides, and a reviewer reading an artifact should be able to see which is which rather than
+    having to trust all names equally.
+32. Name derivation is skipped for structural container roles (`cell`, `row`, `rowgroup`, `table`).
+    Why: in a layout of tables nested three deep, a nameless container would otherwise inherit the
+    caption of an unrelated outer row.
+33. `Click` waits for the frame that actually navigated, not the top-level page. Why: measured, the
+    old top-level wait produced the correct result 1 time in 5, because in a frameset the top
+    document never reloads. See `docs/adr/0005-child-frame-navigation-wait.md`.
+34. `DesktopSurface` exists as a documented, non-functional seam. Why: the claim that the artifact is
+    surface-agnostic should be checkable against a second concrete surface. The module maps every
+    Surface concept to a named UIA API and states plainly where the mapping does not hold, which is
+    the honest form of that claim.

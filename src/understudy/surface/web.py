@@ -7,14 +7,23 @@ traversal is free, so there is no frame-walking code here. Elements carry a `[re
 that is only valid until the next snapshot; nothing durable ever stores one. The model addresses
 an element by its rendered `[index]`, and `_index_to_ref` maps that back to the live ref that
 `aria-ref=...` locators need.
+
+This app names almost nothing: form fields are `f1`, `f2`, `f7`, and there is no `<label for=>`
+anywhere (docs/adr/0004-name-derivation-for-unlabeled-controls.md). `_derive_structural_names`
+recovers a name for those elements from the snapshot's own table structure -- climbing to an
+element's containing row cell and reading a neighbouring caption -- rather than scanning
+backwards through the flat text, which is measurably wrong (the ADR's account-type example).
 """
 
 from __future__ import annotations
 
 import re
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
 from understudy.models.observation import Observation, UIElement
@@ -24,17 +33,36 @@ _LINE_RE = re.compile(r"^(?P<indent>\s*)- (?P<content>.*)$")
 _ATTR_RE = re.compile(r"\[([^\]]*)\]")
 _ROLE_RE = re.compile(r"^[a-zA-Z0-9_]+")
 
+# ADR 0004, ladder step 4: attr_name is only tried for roles a user can actually interact with,
+# and only through a live element handle, so it costs a Playwright round trip per element.
+_INTERACTIVE_ROLES = {"textbox", "combobox", "button", "checkbox", "radio", "link", "searchbox"}
+_ATTR_NAME_CAP = 30
 
-def _parse_snapshot(text: str) -> tuple[list[UIElement], dict[str, str]]:
-    """Parse one page.aria_snapshot(mode="ai") tree into a flat, indexed element list.
+# Bounded window (measured, not guessed -- see docs/adr/0005-child-frame-navigation-wait.md) to
+# detect whether a click started a navigation at all, before deciding it did not.
+_NAV_DETECT_TIMEOUT_MS = 300
+
+
+def _parse_snapshot(text: str) -> tuple[list[UIElement], dict[str, str], list[int | None]]:
+    """Parse one page.aria_snapshot(mode="ai") tree into a flat, indexed element list plus a
+    parent-index array that reconstructs the tree from indentation.
 
     Line grammar: indent, "- ", role, optional `"name"`, zero or more `[attr]`/`[attr=value]`,
     optional trailing `:`, and optionally an inline value after the colon. A line whose content
     starts with "/" is an element property (e.g. "/url: /members"), not an element, and is
     skipped. Indent step is 2 spaces per nesting level (verified against the live fixture).
+
+    `parents[i]` is the index of element i's parent, or None at the root. Because the snapshot
+    text is a pre-order walk, a parent is always seen (and appended) before its children, so
+    `parents[i] < i` always -- later passes exploit that to derive names, frame paths, and
+    ancestor chains in a single forward pass with no recursion.
     """
     elements: list[UIElement] = []
     refs: dict[str, str] = {}
+    parents: list[int | None] = []
+    # Stack of (depth, index) for the current ancestor chain; a new line pops every entry at
+    # or below its own depth, so what remains is that line's parent.
+    stack: list[tuple[int, int]] = []
     for raw_line in text.splitlines():
         if not raw_line.strip():
             continue
@@ -76,15 +104,108 @@ def _parse_snapshot(text: str) -> tuple[list[UIElement], dict[str, str]]:
             else:
                 states.append(attr)
 
-        node_id = str(len(elements))
+        index = len(elements)
+        while stack and stack[-1][0] >= depth:
+            stack.pop()
+        parent = stack[-1][1] if stack else None
+        parents.append(parent)
+        stack.append((depth, index))
+
+        node_id = str(index)
         elements.append(
             UIElement(
-                node_id=node_id, role=role, name=name, value=value, states=states, depth=depth
+                node_id=node_id,
+                role=role,
+                name=name,
+                value=value,
+                states=states,
+                depth=depth,
+                name_source="a11y" if name else "none",
             )
         )
         if ref is not None:
             refs[node_id] = ref
-    return elements, refs
+    return elements, refs, parents
+
+
+def _derive_structural_names(elements: list[UIElement], parents: list[int | None]) -> None:
+    """ADR 0004, ladder steps 2-3: row_label and column_header. Pure and browser-free -- the
+    accessible name, the tree shape, and the parent links are everything this needs.
+
+    The rule is structural, not a backwards text scan: from a nameless element, climb to the
+    ancestor `cell` whose own parent is a `row` (this crosses iframe boundaries for free, since
+    the snapshot already threads them into one tree), then take that cell's nearest preceding
+    sibling cell in the same row that has a name. Only if no preceding sibling in the row has a
+    name does it fall back to the cell at the same position in the preceding sibling row.
+    """
+    children: dict[int, list[int]] = defaultdict(list)
+    for index, parent in enumerate(parents):
+        if parent is not None:
+            children[parent].append(index)
+
+    # containing_row_cell(start) inspects only the PARENT at each climb step, never `start`
+    # itself, so when `start` is itself one of these structural roles the climb walks straight
+    # past its own row/table and keeps going until it finds a cell belonging to an OUTER
+    # table -- in an app nested three tables deep, that lets a nameless inner container
+    # inherit an unrelated outer row's caption. These roles are containers, not the
+    # interactive/value-bearing leaves a caption is for, so they are never candidates for
+    # derivation in the first place rather than patching the climb to special-case `start`.
+    _CONTAINER_ROLES = {"cell", "row", "rowgroup", "table"}
+
+    def containing_row_cell(start: int) -> int | None:
+        node = start
+        while True:
+            parent = parents[node]
+            if parent is None:
+                return None
+            grandparent = parents[parent]
+            if (
+                elements[parent].role == "cell"
+                and grandparent is not None
+                and elements[grandparent].role == "row"
+            ):
+                return parent
+            node = parent
+
+    for element in elements:
+        if element.name:
+            continue
+        if element.role in _CONTAINER_ROLES:
+            continue
+        index = int(element.node_id)
+        cell_index = containing_row_cell(index)
+        if cell_index is None:
+            continue
+        row_index = parents[cell_index]
+        assert row_index is not None
+        row_cells = children[row_index]
+        position = row_cells.index(cell_index)
+
+        preceding_named = next(
+            (
+                sibling
+                for sibling in reversed(row_cells[:position])
+                if elements[sibling].role == "cell" and elements[sibling].name
+            ),
+            None,
+        )
+        if preceding_named is not None:
+            element.name = elements[preceding_named].name
+            element.name_source = "row_label"
+            continue
+
+        table_index = parents[row_index]
+        if table_index is None:
+            continue
+        sibling_rows = [c for c in children[table_index] if elements[c].role == "row"]
+        row_position = sibling_rows.index(row_index)
+        if row_position == 0:
+            continue
+        previous_row = sibling_rows[row_position - 1]
+        previous_row_cells = [c for c in children[previous_row] if elements[c].role == "cell"]
+        if position < len(previous_row_cells) and elements[previous_row_cells[position]].name:
+            element.name = elements[previous_row_cells[position]].name
+            element.name_source = "column_header"
 
 
 class WebSurface:
@@ -107,10 +228,93 @@ class WebSurface:
     def _on_dialog(self, dialog: Any) -> None:
         self.dialog_events.append({"dialog_type": dialog.type, "message": dialog.message})
 
+    def _frame_segment(self, ref: str, cache: dict[str, str]) -> str:
+        """The segment an `iframe` element contributes to a descendant's frame_path: the live
+        frame's name if it has one, else its URL path (fact D). Cached per ref so a frame with
+        many descendants is resolved once per observation, not once per descendant.
+        """
+        cached = cache.get(ref)
+        if cached is not None:
+            return cached
+        handle = self._page.locator(f"aria-ref={ref}").element_handle()
+        frame = handle.content_frame() if handle is not None else None
+        segment = "" if frame is None else (frame.name or urlparse(frame.url).path)
+        cache[ref] = segment
+        return segment
+
+    def _resolve_frame_paths(
+        self, elements: list[UIElement], refs: dict[str, str], parents: list[int | None]
+    ) -> None:
+        """DP over parents (parent index < child index, see _parse_snapshot): each element's
+        frame_path is its parent's frame_path, plus one more segment if the parent is itself an
+        `iframe`. One frame resolution per unique iframe ref, however many descendants it has.
+        """
+        segment_cache: dict[str, str] = {}
+        computed: list[list[str]] = []
+        for index, element in enumerate(elements):
+            parent = parents[index]
+            if parent is None:
+                path = []
+            else:
+                path = list(computed[parent])
+                parent_element = elements[parent]
+                if parent_element.role == "iframe":
+                    parent_ref = refs.get(parent_element.node_id)
+                    if parent_ref is not None:
+                        path.append(self._frame_segment(parent_ref, segment_cache))
+            computed.append(path)
+            element.frame_path = path
+
+    def _resolve_attr_names(self, elements: list[UIElement], refs: dict[str, str]) -> None:
+        """ADR 0004, ladder step 4: placeholder, then the name attribute, read through the
+        element's own ref. Last resort -- only elements still unnamed after a11y and table
+        structure, only interactive roles, and capped, because each check is a round trip.
+        """
+        attempts = 0
+        for element in elements:
+            if attempts >= _ATTR_NAME_CAP:
+                break
+            if element.name or element.role not in _INTERACTIVE_ROLES:
+                continue
+            ref = refs.get(element.node_id)
+            if ref is None:
+                continue
+            attempts += 1
+            attrs = self._page.locator(f"aria-ref={ref}").evaluate(
+                "el => ({p: el.placeholder || '', n: el.getAttribute('name') || ''})"
+            )
+            placeholder = attrs.get("p") or ""
+            name_attr = attrs.get("n") or ""
+            if placeholder:
+                element.name = placeholder
+                element.name_source = "attr_name"
+            elif name_attr:
+                element.name = name_attr
+                element.name_source = "attr_name"
+
+    def _attach_ancestors(self, elements: list[UIElement], parents: list[int | None]) -> None:
+        """DP over parents: each element's ancestors is its parent plus the parent's own
+        ancestors, capped at 5. Run last, so an ancestor's entry reflects its final derived
+        name, not just its raw accessible name.
+        """
+        for index, element in enumerate(elements):
+            parent = parents[index]
+            if parent is None:
+                element.ancestors = []
+            else:
+                parent_element = elements[parent]
+                element.ancestors = (
+                    [(parent_element.role, parent_element.name)] + parent_element.ancestors
+                )[:5]
+
     def observe(self) -> Observation:
         snapshot = self._page.aria_snapshot(mode="ai")
-        elements, refs = _parse_snapshot(snapshot)
+        elements, refs, parents = _parse_snapshot(snapshot)
         self._index_to_ref = refs
+        _derive_structural_names(elements, parents)
+        self._resolve_frame_paths(elements, refs, parents)
+        self._resolve_attr_names(elements, refs)
+        self._attach_ancestors(elements, parents)
         return Observation(url=self._page.url, title=self._page.title(), elements=elements)
 
     def act(self, action: Action) -> str | None:
@@ -119,8 +323,8 @@ class WebSurface:
             self._page.wait_for_load_state("load")
             return None
         if isinstance(action, Click):
-            self._page.locator(f"aria-ref={self._require_ref(action.node_id)}").click()
-            self._page.wait_for_load_state("load")
+            ref = self._require_ref(action.node_id)
+            self._click_and_settle(ref)
             return None
         if isinstance(action, Type):
             self._page.locator(f"aria-ref={self._require_ref(action.node_id)}").fill(action.text)
@@ -138,6 +342,48 @@ class WebSurface:
             text: str = locator.inner_text()
             return text
         raise ValueError(f"unsupported action: {action!r}")
+
+    def _click_and_settle(self, ref: str) -> None:
+        """Click, then wait for whatever the click actually did -- which, in a frameset app,
+        is almost always a CHILD FRAME navigating rather than the top-level page.
+
+        THE RACE: `page.wait_for_load_state("load")` only covers the top-level page, and
+        measured directly against this fixture, calling `frame.wait_for_load_state("load")` on
+        the child frame right after the click *also* fails -- it returns near-instantly on
+        STALE state, because the click's own protocol round trip completes before Playwright
+        has delivered the `framenavigated` protocol event for the frame back to this process.
+        Nothing forces that delivery except another blocking call that pumps the connection.
+        `expect_event("framenavigated", ...)` is that blocking call: it starts listening
+        *before* the click runs (so it cannot miss a navigation that starts within the click's
+        own round trip) and, on exit, blocks until the event is actually delivered or the bound
+        elapses. Only once it fires do we know which frame to wait on, and only then does that
+        frame's own `.url` and `wait_for_load_state("load")` reflect the new document rather
+        than the old one.
+
+        `expect_navigation()` wrapped around every click is the wrong tool here: with no
+        predicate it is page-scoped (misses child-frame navigations entirely) and, when a click
+        causes no navigation at all -- typing never reaches this method, but a non-navigating
+        click does -- it blocks out its full default timeout (30s) every single time, which is
+        a fixed sleep wearing a condition-wait's clothes. `expect_event` has the same shape, and
+        there is no way to prove a negative ("nothing will ever navigate") without waiting some
+        bound, so a non-navigating click always pays this bound -- but the bound itself is
+        small and measured, not guessed: `framenavigated` arrives 15-30ms after the click on
+        this fixture (measured directly, docs/adr/0005), so 300ms is >10x headroom for a slower
+        machine while still cutting the cost of a non-navigating click by 3-6x versus a naive
+        1-second guess (measured: ~1000ms/click -> ~300ms/click).
+        """
+        frame = None
+        try:
+            with self._page.expect_event(
+                "framenavigated", timeout=_NAV_DETECT_TIMEOUT_MS
+            ) as nav_info:
+                self._page.locator(f"aria-ref={ref}").click()
+            frame = nav_info.value
+        except PlaywrightTimeoutError:
+            pass  # no navigation started within the bound: nothing to settle beyond the page.
+        if frame is not None:
+            frame.wait_for_load_state("load")
+        self._page.wait_for_load_state("load")
 
     def screenshot(self, path: Path) -> None:
         """Raw PNG bytes this phase; Phase 5 masks them using aria_snapshot(boxes=True)."""

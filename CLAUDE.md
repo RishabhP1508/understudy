@@ -393,7 +393,7 @@ pad it.
     ## Phase N Verification Report
     Status: COMPLETE | BLOCKED
     Loop summary: <rounds run; what the builder fixed each round>
-
+    Delegation: <what went to the builder> | <what the main session did itself>
     ### Machine-checkable gate  (ALL green for COMPLETE)
     - [x] <item> — ran: `<command>` — got: <actual output> — expected: <expected output>
     - [ ] <item> — BLOCKED: <the real reason, and what was tried>

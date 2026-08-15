@@ -1,0 +1,1156 @@
+{
+  "url": "http://127.0.0.1:5055/app",
+  "title": "Legacy Bank Back Office",
+  "elements": [
+    {
+      "node_id": "0",
+      "role": "generic",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 0,
+      "frame_path": [],
+      "ancestors": [],
+      "name_source": "none"
+    },
+    {
+      "node_id": "1",
+      "role": "iframe",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 1,
+      "frame_path": [],
+      "ancestors": [
+        [
+          "generic",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "2",
+      "role": "table",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 2,
+      "frame_path": [
+        "navframe"
+      ],
+      "ancestors": [
+        [
+          "iframe",
+          ""
+        ],
+        [
+          "generic",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "3",
+      "role": "rowgroup",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 3,
+      "frame_path": [
+        "navframe"
+      ],
+      "ancestors": [
+        [
+          "table",
+          ""
+        ],
+        [
+          "iframe",
+          ""
+        ],
+        [
+          "generic",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "4",
+      "role": "row",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 4,
+      "frame_path": [
+        "navframe"
+      ],
+      "ancestors": [
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "iframe",
+          ""
+        ],
+        [
+          "generic",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "5",
+      "role": "cell",
+      "name": "Legacy Bank",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 5,
+      "frame_path": [
+        "navframe"
+      ],
+      "ancestors": [
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "iframe",
+          ""
+        ],
+        [
+          "generic",
+          ""
+        ]
+      ],
+      "name_source": "a11y"
+    },
+    {
+      "node_id": "6",
+      "role": "row",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 4,
+      "frame_path": [
+        "navframe"
+      ],
+      "ancestors": [
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "iframe",
+          ""
+        ],
+        [
+          "generic",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "7",
+      "role": "cell",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 5,
+      "frame_path": [
+        "navframe"
+      ],
+      "ancestors": [
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "iframe",
+          ""
+        ],
+        [
+          "generic",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "8",
+      "role": "link",
+      "name": "Member Search",
+      "value": null,
+      "states": [
+        "cursor=pointer"
+      ],
+      "bounds": null,
+      "depth": 6,
+      "frame_path": [
+        "navframe"
+      ],
+      "ancestors": [
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "iframe",
+          ""
+        ]
+      ],
+      "name_source": "a11y"
+    },
+    {
+      "node_id": "9",
+      "role": "iframe",
+      "name": "",
+      "value": null,
+      "states": [
+        "active"
+      ],
+      "bounds": null,
+      "depth": 1,
+      "frame_path": [],
+      "ancestors": [
+        [
+          "generic",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "10",
+      "role": "generic",
+      "name": "",
+      "value": null,
+      "states": [
+        "active"
+      ],
+      "bounds": null,
+      "depth": 2,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "iframe",
+          ""
+        ],
+        [
+          "generic",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "11",
+      "role": "table",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 3,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "generic",
+          ""
+        ],
+        [
+          "iframe",
+          ""
+        ],
+        [
+          "generic",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "12",
+      "role": "rowgroup",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 4,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "table",
+          ""
+        ],
+        [
+          "generic",
+          ""
+        ],
+        [
+          "iframe",
+          ""
+        ],
+        [
+          "generic",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "13",
+      "role": "row",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 5,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "generic",
+          ""
+        ],
+        [
+          "iframe",
+          ""
+        ],
+        [
+          "generic",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "14",
+      "role": "cell",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 6,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "generic",
+          ""
+        ],
+        [
+          "iframe",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "15",
+      "role": "table",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 7,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "generic",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "16",
+      "role": "rowgroup",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 8,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "table",
+          ""
+        ],
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "17",
+      "role": "row",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 9,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "18",
+      "role": "cell",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 10,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "19",
+      "role": "table",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 11,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "cell",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "20",
+      "role": "rowgroup",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 12,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "table",
+          ""
+        ],
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "21",
+      "role": "row",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 13,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "22",
+      "role": "cell",
+      "name": "Member ID",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 14,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ]
+      ],
+      "name_source": "a11y"
+    },
+    {
+      "node_id": "23",
+      "role": "cell",
+      "name": "12345",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 14,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ]
+      ],
+      "name_source": "a11y"
+    },
+    {
+      "node_id": "24",
+      "role": "row",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 13,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "25",
+      "role": "cell",
+      "name": "Name",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 14,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ]
+      ],
+      "name_source": "a11y"
+    },
+    {
+      "node_id": "26",
+      "role": "cell",
+      "name": "Testuser Alpha",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 14,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ]
+      ],
+      "name_source": "a11y"
+    },
+    {
+      "node_id": "27",
+      "role": "row",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 13,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "28",
+      "role": "cell",
+      "name": "Status",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 14,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ]
+      ],
+      "name_source": "a11y"
+    },
+    {
+      "node_id": "29",
+      "role": "cell",
+      "name": "Active",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 14,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ]
+      ],
+      "name_source": "a11y"
+    },
+    {
+      "node_id": "30",
+      "role": "row",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 13,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "31",
+      "role": "cell",
+      "name": "Savings Balance",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 14,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ]
+      ],
+      "name_source": "a11y"
+    },
+    {
+      "node_id": "32",
+      "role": "cell",
+      "name": "",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 14,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ]
+      ],
+      "name_source": "none"
+    },
+    {
+      "node_id": "33",
+      "role": "iframe",
+      "name": "Savings Balance",
+      "value": null,
+      "states": [],
+      "bounds": null,
+      "depth": 15,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ],
+        [
+          "cell",
+          ""
+        ]
+      ],
+      "name_source": "row_label"
+    },
+    {
+      "node_id": "34",
+      "role": "generic",
+      "name": "Savings Balance",
+      "value": "$1,204.55",
+      "states": [],
+      "bounds": null,
+      "depth": 16,
+      "frame_path": [
+        "contentframe",
+        "/member/12345/balance"
+      ],
+      "ancestors": [
+        [
+          "iframe",
+          "Savings Balance"
+        ],
+        [
+          "cell",
+          ""
+        ],
+        [
+          "row",
+          ""
+        ],
+        [
+          "rowgroup",
+          ""
+        ],
+        [
+          "table",
+          ""
+        ]
+      ],
+      "name_source": "row_label"
+    },
+    {
+      "node_id": "35",
+      "role": "link",
+      "name": "Open Subaccount",
+      "value": null,
+      "states": [
+        "cursor=pointer"
+      ],
+      "bounds": null,
+      "depth": 3,
+      "frame_path": [
+        "contentframe"
+      ],
+      "ancestors": [
+        [
+          "generic",
+          ""
+        ],
+        [
+          "iframe",
+          ""
+        ],
+        [
+          "generic",
+          ""
+        ]
+      ],
+      "name_source": "a11y"
+    }
+  ]
+}
