@@ -173,3 +173,26 @@ raises an error instead of going quietly dormant.
     surface-agnostic should be checkable against a second concrete surface. The module maps every
     Surface concept to a named UIA API and states plainly where the mapping does not hold, which is
     the honest form of that claim.
+
+## Phase 4 decisions
+
+35. A recorded target carries several independent signals and resolution walks them in a fixed
+    order, reporting which one won. Why: a step with one way to find its target is one perception
+    change away from worthless, which is not hypothetical here. See
+    `docs/adr/0006-ranked-descriptors-over-selectors.md`.
+36. A strategy matching more than one element is skipped, never resolved to the first match, and a
+    total failure returns the per-strategy candidate counts. Why: first-match-wins is how replay
+    silently acts on the wrong row, and a failure that says "role_name_exact saw 0, role_ordinal saw
+    3" is debuggable where "not found" is not.
+37. `describe()` and `ROLE_ORDINAL` compute the ordinal through one shared pool helper. Why: they
+    were briefly allowed to disagree, and a recorded ordinal then meant something different at
+    replay than at record time. Measured: a descriptor for the second "Edit" button resolved to
+    "Delete". Two definitions of the same index is a wrong-element bug waiting to happen.
+38. A descriptor that recorded a MEANINGFUL name and now matches nothing is not rescued by falling
+    back to the only element of that role. Why: that is a confident wrong action, which is worse
+    than a reported failure. Measured: a descriptor for "Confirm Transfer" resolved to "Log out".
+    The positional rescue applies only when the recorded name was empty, because then position is
+    all the descriptor ever had.
+39. Replay returns a failure when the success checkpoint does not hold. Why: it previously returned
+    Success with `checkpoint_verified: false` and exit code 0, so a replay that did not achieve its
+    goal reported success. The checkpoint is what decides, or it is decoration.
