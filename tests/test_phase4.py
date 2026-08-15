@@ -564,11 +564,11 @@ def test_finish_result_is_hard_failure_when_checkpoint_did_not_verify() -> None:
     checkpoint = Checkpoint(kind="text_present", target="page", value="Transfer Complete")
 
     result = _finish_result(
-        checkpoint_verified=False, success_checkpoint=checkpoint, outputs={}, steps_executed=4
+        checkpoint_verified=False, success_checkpoint=checkpoint, outputs={}, steps_run=4
     )
 
     assert result.kind == "hard_failure"
-    assert result.step_index == 4
+    assert result.step_id == 4
     assert "Transfer Complete" in result.expected
     assert "not present" in result.observed
 
@@ -580,10 +580,9 @@ def test_finish_result_is_success_when_checkpoint_verified() -> None:
         checkpoint_verified=True,
         success_checkpoint=checkpoint,
         outputs={"balance": "$100"},
-        steps_executed=4,
+        steps_run=4,
     )
 
     assert result.kind == "success"
-    assert result.checkpoint_verified is True
     assert result.outputs == {"balance": "$100"}
-    assert result.steps_executed == 4
+    assert result.steps_run == 4

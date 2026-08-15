@@ -254,3 +254,36 @@ raises an error instead of going quietly dormant.
     action are the same decision with a different outcome, and `record/recorder.py` needs exactly
     one predicate (`decision.allowed is True`) to know which events became `Step`s, not two event
     names to keep in sync.
+
+## Phase 6 decisions
+
+50. Every line of `run.jsonl` is built through one Pydantic model, `RunEvent`
+    (`evidence/logger.py`), not assembled as a bare dict per call site. Why: "every line
+    validates against the event schema" is otherwise a claim someone has to check by reading
+    fifteen call sites; built through one model, it is true by construction. A `type == "act"`
+    event additionally cannot be constructed at all without a real, non-redacted `rationale` --
+    R5 enforced at the schema level, not by convention.
+51. The event PolicyGate.dispatch logs is renamed from `policy_decision` to `act`, and is now
+    logged AFTER `surface.act` runs (in `except`/`else`, before `finally`'s own navigation check
+    can raise), not before. Why: the one event for a dispatched action can then carry its own
+    result (`act_result`), which is stronger evidence of what happened than logging the intent to
+    act and hoping nothing went wrong afterward.
+52. The result contract is four terminal kinds (`Success`, `BusinessOutcome`, `HardFailure`,
+    `Escalated`) on a `kind` discriminator, with `HardFailure.category` a ten-value StrEnum and a
+    recovered condition logged as a `run.jsonl` event, never a fifth kind. Why, and the full
+    ten-category reasoning: `docs/adr/0009-result-contract-and-failure-taxonomy.md`.
+53. `Provenance.perception_version` and the module constant `PERCEPTION_VERSION` exist so a
+    locator failure can be CLASSIFIED (stale perception vs. a genuinely unresolved target), never
+    so a version mismatch can gate replay before it starts. Why: the one artifact in `artifacts/`
+    predates the field, still replays successfully end to end, and must keep doing so -- a
+    pre-flight gate would refuse runs that would have succeeded.
+54. Screenshot pairs, not singles: `steps/NNN_before.png` masks the observation the decision was
+    made from; `steps/NNN_after.png` masks a FRESH observation taken once the action has run, in
+    both discovery and replay, on every step, not only on failure. Why: the action just changed
+    the page, so masking `after` from the pre-action observation would position a box over pixels
+    that no longer show what it thinks they show -- a leak, not a cosmetic bug. The cost is one
+    extra `observe()` per step, paid and noted in code rather than avoided by reusing a stale one.
+55. A discovery run writes `transcript.jsonl` incrementally, one redacted line per model turn, so
+    a crashed run still has every turn it completed. Why: the alternative (buffer the transcript
+    in memory, write it once at the end) loses the R8 evidence trail on exactly the runs most
+    worth debugging -- the ones that did not finish.

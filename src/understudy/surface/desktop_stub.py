@@ -100,6 +100,24 @@ Concept-by-concept mapping, browser (Playwright/Chromium accessibility tree) -> 
              are answering the same question -- "which embedded surface is this element actually
              on" -- which is exactly the seam this project's schema is designed to generalize.
 
+- dom_snapshot() (evidence, never perception -- Phase 6)
+    Web:     `page.content()`, the raw top-level document HTML, attached to a HardFailure purely
+             as a richer signal for a human (R5); the model never sees it.
+    Desktop: no DOM exists to dump. The nearest analogue a human debugging a failure could use is
+             a full UIA tree dump (every AutomationElement's ControlType/Name/BoundingRectangle,
+             recursively) rendered as text -- structurally closer to observe()'s own output than
+             to a DOM snapshot, which is itself a sign the web/desktop split runs deeper here than
+             a one-line mapping can paper over.
+
+- trace (evidence, Phase 6)
+    Web:     `page.context.tracing.start()`/`.stop(path=...)`, a Playwright-native recording of
+             every action, screenshot, and network event for the run, kept only on failure.
+    Desktop: UIA has no equivalent recorder. The nearest analogue is Windows' own Event Tracing
+             for Windows (ETW), which can capture UI Automation provider events, but nothing in
+             `pywinauto`/`comtypes` starts or stops an ETW session the way this project starts and
+             stops a Playwright trace -- a real implementation would need its own capture harness,
+             not a drop-in call.
+
 - name derivation for unlabeled controls (docs/adr/0004's row/column rule)
     The same problem exists on Win32: a grid built from a bare `DataGrid` or an owner-drawn
     `ListView` routinely has controls with no accessible name, because the caption lives in a

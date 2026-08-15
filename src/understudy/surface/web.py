@@ -499,6 +499,23 @@ class WebSurface:
             if box is not None:
                 element.bounds = [box["x"], box["y"], box["width"], box["height"]]
 
+    def dom_snapshot(self) -> str:
+        """The raw top-level document HTML (`page.content()`). Evidence for a HUMAN debugging a
+        failure, never perception for the model -- the model only ever sees observe()'s indexed
+        accessibility text (ARCHITECTURE.md decision 3); this exists solely so
+        EvidenceLogger.capture_failure has a richer signal to attach to a HardFailure (R5).
+        """
+        content: str = self._page.content()
+        return content
+
+    @property
+    def tracing(self) -> Any:
+        """Tracing lives on the BrowserContext, not the Page. `evidence/logger.py` starts and
+        stops it around a whole run; this property is the seam that lets it do so without
+        reaching into a private attribute.
+        """
+        return self._page.context.tracing
+
     def close(self) -> None:
         self._browser.close()
         self._playwright.stop()
