@@ -56,14 +56,18 @@ Concept-by-concept mapping, browser (Playwright/Chromium accessibility tree) -> 
     Desktop: `AutomationElement.Current.BoundingRectangle`, a screen-space rectangle UIA always
              exposes. Cleaner than the web case, where a box has to be explicitly requested.
 
-- url
-    Web:     `page.url`, the current top-level document's URL; the allowlist origin/route check
-             matches straight against it.
+- url / urls()
+    Web:     `page.url`, the current top-level document's URL, plus (Phase 7 hotfix) `urls()`:
+             the shell plus every child frame's own URL, since the allowlist and mutating-route
+             checks have to see every frame actually loaded, not just a frameset shell that may
+             never itself navigate (docs/adr/0005, docs/adr/0007's update).
     Desktop: no per-element URL exists on Win32. The nearest analogue is the foreground
              `Window` element's process executable path plus its title/class, and an allowlist for
              desktop would need to be keyed on that pair instead of scheme+origin -- a different
              shape from the web case, not a drop-in substitute, which is why this is called out
-             rather than assumed to just work.
+             rather than assumed to just work. `urls()`'s analogue is that same Window identity
+             plus every embedded `Pane`'s own identity (see `frame_path` below for why a Pane
+             chain, not a URL list, is desktop's version of "every surface currently loaded").
 
 - Click
     Web:     `page.locator("aria-ref=...").click()`, a real synthesized input event.
@@ -165,6 +169,12 @@ class DesktopSurface:
         raise NotImplementedError(
             "desktop has no per-element URL; see this module's docstring for the nearest "
             "analogue (foreground window executable path plus title/class)"
+        )
+
+    def urls(self) -> list[str]:
+        raise NotImplementedError(
+            "desktop has no per-frame URL list; the nearest analogue is the foreground Window's "
+            "identity plus every embedded Pane's own identity -- see this module's docstring"
         )
 
     def observe(self) -> Observation:

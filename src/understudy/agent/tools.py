@@ -93,6 +93,49 @@ EXTRACT_TOOL: dict[str, Any] = {
     },
 }
 
+SELECT_TOOL: dict[str, Any] = {
+    "name": "select",
+    "description": "Choose an option, by its value, in the <select> control at the given [index].",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "index": {
+                "type": "integer",
+                "description": "The [index] of the select control.",
+            },
+            "value": {"type": "string", "description": "The option value to select."},
+            "rationale": {
+                "type": "string",
+                "description": "Why this option is the right choice right now.",
+            },
+        },
+        "required": ["index", "value", "rationale"],
+    },
+}
+
+ESCALATE_TOOL: dict[str, Any] = {
+    "name": "escalate",
+    "description": (
+        "Declare that you are stuck and a human needs to take over. Ends the run; a human will "
+        "see the current page and why you stopped, and can take control of this same session."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "reason_code": {
+                "type": "string",
+                "description": "A short machine-readable code for why you are stuck, e.g. "
+                "'target_not_found' or 'needs_human_judgment'.",
+            },
+            "rationale": {
+                "type": "string",
+                "description": "What you tried and why you believe a human is needed now.",
+            },
+        },
+        "required": ["reason_code", "rationale"],
+    },
+}
+
 FINISH_TOOL: dict[str, Any] = {
     "name": "finish",
     "description": (
@@ -127,7 +170,9 @@ ALL_TOOLS: list[dict[str, Any]] = [
     NAVIGATE_TOOL,
     CLICK_TOOL,
     TYPE_TOOL,
+    SELECT_TOOL,
     READ_TOOL,
     EXTRACT_TOOL,
     FINISH_TOOL,
+    ESCALATE_TOOL,
 ]

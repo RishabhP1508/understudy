@@ -473,6 +473,20 @@ class WebSurface:
     def url(self) -> str:
         return self._page.url
 
+    def urls(self) -> list[str]:
+        """The shell plus every child frame, deduplicated, order preserved. Measured live
+        against this fixture: `page.url` stays `http://127.0.0.1:5055/app` for the whole
+        session (the frameset shell never reloads -- the same fact docs/adr/0005 already
+        recorded for click waits), while the actual content lives in `self._page.frames`
+        (`navframe` at `/nav`, `contentframe` at whatever route the user last navigated to
+        inside it). `PolicyGate.dispatch` needs every one of these, not just the shell.
+        """
+        seen: list[str] = []
+        for frame_url in [self._page.url, *(frame.url for frame in self._page.frames)]:
+            if frame_url not in seen:
+                seen.append(frame_url)
+        return seen
+
     def screenshot_bytes(self) -> bytes:
         """Raw PNG bytes. Masking happens one layer up, in EvidenceLogger.screenshot -- this
         method never writes anything itself, so there is exactly one place PNG bytes hit disk

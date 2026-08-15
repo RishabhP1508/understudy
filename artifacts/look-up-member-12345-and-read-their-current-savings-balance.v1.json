@@ -13,7 +13,7 @@
     {
       "name": "savings_balance",
       "type": "string",
-      "description": "Extracting the savings balance."
+      "description": "Extract the current savings balance for member 12345."
     }
   ],
   "steps": [
@@ -22,11 +22,21 @@
       "action": "type",
       "target": {
         "role": "textbox",
-        "name": "",
-        "ordinal": 0
+        "name": "Username",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [],
+        "ordinal": 0,
+        "relational": {
+          "kind": "row_label",
+          "label": "Username"
+        },
+        "dom_fallback": null,
+        "confidence": 0.49999999999999994,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
       },
       "value": "admin",
-      "rationale": "Entering username.",
+      "rationale": "Type 'admin' into Username field.",
       "postcondition": null
     },
     {
@@ -34,11 +44,21 @@
       "action": "type",
       "target": {
         "role": "textbox",
-        "name": "",
-        "ordinal": 1
+        "name": "Password",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [],
+        "ordinal": 1,
+        "relational": {
+          "kind": "row_label",
+          "label": "Password"
+        },
+        "dom_fallback": null,
+        "confidence": 0.49999999999999994,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
       },
-      "value": "[REDACTED]",
-      "rationale": "[REDACTED]",
+      "value": "${param:password}",
+      "rationale": "Type '[REDACTED]' into Password field.",
       "postcondition": null
     },
     {
@@ -47,10 +67,17 @@
       "target": {
         "role": "button",
         "name": "Login",
-        "ordinal": null
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [],
+        "ordinal": null,
+        "relational": null,
+        "dom_fallback": null,
+        "confidence": 0.9,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
       },
       "value": null,
-      "rationale": "Clicking Login button.",
+      "rationale": "Click Login button to log into the application.",
       "postcondition": null
     },
     {
@@ -58,11 +85,23 @@
       "action": "type",
       "target": {
         "role": "textbox",
-        "name": "",
-        "ordinal": null
+        "name": "Member ID",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": null,
+        "relational": {
+          "kind": "row_label",
+          "label": "Member ID"
+        },
+        "dom_fallback": null,
+        "confidence": 0.65,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
       },
       "value": "12345",
-      "rationale": "Entering Member ID 12345.",
+      "rationale": "Enter Member ID 12345 into the Member ID search box.",
       "postcondition": null
     },
     {
@@ -71,10 +110,22 @@
       "target": {
         "role": "button",
         "name": "Search",
-        "ordinal": null
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": null,
+        "relational": {
+          "kind": "row_label",
+          "label": "Member ID"
+        },
+        "dom_fallback": null,
+        "confidence": 0.9500000000000001,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
       },
       "value": null,
-      "rationale": "Clicking Search button.",
+      "rationale": "Click Search button to look up member 12345.",
       "postcondition": null
     },
     {
@@ -83,10 +134,19 @@
       "target": {
         "role": "link",
         "name": "12345 - Testuser Alpha",
-        "ordinal": null
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": null,
+        "relational": null,
+        "dom_fallback": null,
+        "confidence": 0.9,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
       },
       "value": null,
-      "rationale": "Clicking the member link to view details.",
+      "rationale": "Click on member link '12345 - Testuser Alpha' to view member details.",
       "postcondition": null
     },
     {
@@ -94,11 +154,29 @@
       "action": "extract",
       "target": {
         "role": "generic",
-        "name": "",
-        "ordinal": 2
+        "name": "Savings Balance",
+        "name_match": "exact",
+        "scope": [
+          [
+            "iframe",
+            "Savings Balance"
+          ]
+        ],
+        "frame_path": [
+          "contentframe",
+          "/member/12345/balance"
+        ],
+        "ordinal": null,
+        "relational": {
+          "kind": "row_label",
+          "label": "Savings Balance"
+        },
+        "dom_fallback": null,
+        "confidence": 0.65,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
       },
       "value": "savings_balance",
-      "rationale": "Extracting the savings balance.",
+      "rationale": "Extract the current savings balance for member 12345.",
       "postcondition": null
     }
   ],
@@ -108,10 +186,12 @@
     "value": "$1,204.55"
   },
   "provenance": {
-    "created_at": "2026-08-15T00:50:46.099808+00:00",
-    "model": "gemini-3.1-flash-lite",
-    "run_id": "3348784c8a88",
-    "transcript_hash": "9e190f8669b375668db69a227d1b7ad9b46b7dae4f39529d6a636dbfd61707c0",
-    "understudy_version": "0.1.0"
-  }
+    "created_at": "2026-08-15T16:39:55.222912+00:00",
+    "model": "gemini-3.6-flash",
+    "run_id": "b2405e162ba4",
+    "transcript_hash": "0e4f651f23bc9617950c09f8ae75aef4de186e2239debb7f4e8ae09975186d1b",
+    "understudy_version": "0.1.0",
+    "perception_version": 2
+  },
+  "status": "draft"
 }

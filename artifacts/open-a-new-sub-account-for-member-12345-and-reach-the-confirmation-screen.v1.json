@@ -1,0 +1,280 @@
+{
+  "schema_version": 1,
+  "capability_id": "open-a-new-sub-account-for-member-12345-and-reach-the-confirmation-screen",
+  "version": 1,
+  "name": "open a new sub-account for member 12345 and reach the confirmation screen",
+  "description": "open a new sub-account for member 12345 and reach the confirmation screen",
+  "target": {
+    "entry_point": "http://127.0.0.1:5055/login",
+    "surface_kind": "web"
+  },
+  "inputs": [],
+  "outputs": [],
+  "steps": [
+    {
+      "index": 0,
+      "action": "type",
+      "target": {
+        "role": "textbox",
+        "name": "Username",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [],
+        "ordinal": 0,
+        "relational": {
+          "kind": "row_label",
+          "label": "Username"
+        },
+        "dom_fallback": null,
+        "confidence": 0.49999999999999994,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
+      },
+      "value": "admin",
+      "rationale": "Logging in to the back office.",
+      "postcondition": null
+    },
+    {
+      "index": 1,
+      "action": "type",
+      "target": {
+        "role": "textbox",
+        "name": "Password",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [],
+        "ordinal": 1,
+        "relational": {
+          "kind": "row_label",
+          "label": "Password"
+        },
+        "dom_fallback": null,
+        "confidence": 0.49999999999999994,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
+      },
+      "value": "${param:password}",
+      "rationale": "Typing [REDACTED] to log in.",
+      "postcondition": null
+    },
+    {
+      "index": 2,
+      "action": "click",
+      "target": {
+        "role": "button",
+        "name": "Login",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [],
+        "ordinal": null,
+        "relational": null,
+        "dom_fallback": null,
+        "confidence": 0.9,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
+      },
+      "value": null,
+      "rationale": "Clicking login button.",
+      "postcondition": null
+    },
+    {
+      "index": 3,
+      "action": "type",
+      "target": {
+        "role": "textbox",
+        "name": "Member ID",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": null,
+        "relational": {
+          "kind": "row_label",
+          "label": "Member ID"
+        },
+        "dom_fallback": null,
+        "confidence": 0.65,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
+      },
+      "value": "12345",
+      "rationale": "Searching for member 12345.",
+      "postcondition": null
+    },
+    {
+      "index": 4,
+      "action": "click",
+      "target": {
+        "role": "button",
+        "name": "Search",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": null,
+        "relational": {
+          "kind": "row_label",
+          "label": "Member ID"
+        },
+        "dom_fallback": null,
+        "confidence": 0.9500000000000001,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
+      },
+      "value": null,
+      "rationale": "Clicking search button.",
+      "postcondition": null
+    },
+    {
+      "index": 5,
+      "action": "click",
+      "target": {
+        "role": "link",
+        "name": "12345 - Testuser Alpha",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": null,
+        "relational": null,
+        "dom_fallback": null,
+        "confidence": 0.9,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
+      },
+      "value": null,
+      "rationale": "Clicking on the found member link to view details.",
+      "postcondition": null
+    },
+    {
+      "index": 6,
+      "action": "click",
+      "target": {
+        "role": "link",
+        "name": "Open Subaccount",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": null,
+        "relational": null,
+        "dom_fallback": null,
+        "confidence": 0.9,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
+      },
+      "value": null,
+      "rationale": "Clicking 'Open Subaccount' to start the process.",
+      "postcondition": null
+    },
+    {
+      "index": 7,
+      "action": "select",
+      "target": {
+        "role": "combobox",
+        "name": "Account Type",
+        "name_match": "exact",
+        "scope": [
+          [
+            "cell",
+            "Savings"
+          ]
+        ],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": null,
+        "relational": {
+          "kind": "row_label",
+          "label": "Account Type"
+        },
+        "dom_fallback": null,
+        "confidence": 0.65,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
+      },
+      "value": null,
+      "rationale": "Choosing Checking account type for the new sub-account.",
+      "postcondition": null
+    },
+    {
+      "index": 8,
+      "action": "type",
+      "target": {
+        "role": "textbox",
+        "name": "Nickname",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": 0,
+        "relational": {
+          "kind": "row_label",
+          "label": "Nickname"
+        },
+        "dom_fallback": null,
+        "confidence": 0.49999999999999994,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
+      },
+      "value": "Personal Checking",
+      "rationale": "Adding a nickname for the new account.",
+      "postcondition": null
+    },
+    {
+      "index": 9,
+      "action": "type",
+      "target": {
+        "role": "textbox",
+        "name": "Initial Deposit",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": 1,
+        "relational": {
+          "kind": "row_label",
+          "label": "Initial Deposit"
+        },
+        "dom_fallback": null,
+        "confidence": 0.49999999999999994,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
+      },
+      "value": "100.00",
+      "rationale": "Entering initial deposit.",
+      "postcondition": null
+    },
+    {
+      "index": 10,
+      "action": "click",
+      "target": {
+        "role": "button",
+        "name": "Submit",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": null,
+        "relational": null,
+        "dom_fallback": null,
+        "confidence": 0.9,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
+      },
+      "value": null,
+      "rationale": "Submitting the form to open the sub-account.",
+      "postcondition": null
+    }
+  ],
+  "success": {
+    "kind": "text_present",
+    "target": "page",
+    "value": "Subaccount Opened"
+  },
+  "provenance": {
+    "created_at": "2026-08-15T16:14:37.126256+00:00",
+    "model": "gemini-3.1-flash-lite",
+    "run_id": "adccddf2b6e5",
+    "transcript_hash": "ab0796572c125cfd3684940da1a22e5267e68efae3e629cf64f574f1c12e1d2d",
+    "understudy_version": "0.1.0",
+    "perception_version": 2
+  },
+  "status": "draft"
+}

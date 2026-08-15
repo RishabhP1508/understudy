@@ -61,3 +61,16 @@ class Surface(Protocol):
     def observe(self) -> Observation: ...
 
     def act(self, action: Action) -> str | None: ...
+
+    def urls(self) -> list[str]:
+        """Every URL currently loaded: the top-level document plus every child frame. A
+        frameset's top-level document frequently never navigates at all
+        (docs/adr/0005-child-frame-navigation-wait.md), so `.url` alone can describe a shell that
+        the element an action targets has nothing to do with -- `PolicyGate.dispatch` reads this,
+        not `.url`, for its allowlist and mutating-route checks on non-navigate actions
+        (docs/adr/0007's update). Callers treat this as an OPTIONAL capability (read via
+        `getattr(surface, "urls", None)`, the same pattern already used for `dialog_events`,
+        `screenshot_bytes`, `fill_bounds`, `tracing`, and `dom_snapshot`), so a minimal test
+        double that only implements `url` keeps working unmodified.
+        """
+        ...

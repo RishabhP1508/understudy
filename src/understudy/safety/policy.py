@@ -9,6 +9,13 @@ Checks run in a fixed order and the first to refuse wins: pending navigation vio
 origin+route allowlist, then the action type, then the target's role, then forbidden text
 patterns, then risk. `classify()` (safety/risk.py) is computed up front so its reason travels with
 every logged decision, allow or deny, not only the ones it itself refuses.
+
+For a non-Navigate action, the allowlist and risk checks both read `Surface.urls()` (every URL
+currently loaded, across every frame), not `surface.url` alone. A live discovery run found this
+gate checking only a frameset's shell URL, which never navigates at all
+(docs/adr/0005-child-frame-navigation-wait.md) -- so a form living in a content frame that had
+actually navigated onto a `mutating_routes` pattern was invisible to this gate, and the fixture's
+own subaccount "Submit" was dispatched as SAFE_REVERSIBLE. See docs/adr/0007's update.
 """
 
 from __future__ import annotations
@@ -43,6 +50,13 @@ class Policy(BaseModel):
     max_steps: int = 25
     max_wall_clock_seconds: float = 180
     max_action_retries: int = 2
+    # Shared by agent/loop.py's three stall-style stopping conditions (no_progress,
+    # loop_detected, dead_end): the same "how many times before we call it" question, not three
+    # independently-tuned knobs. See docs/adr/0010.
+    stall_limit: int = 3
+    # How often a discovery turn gets an unconditional full render as a refresh, even when the
+    # observation digest says a diff would otherwise be safe to send.
+    full_render_every: int = 5
     forbidden_text_patterns: list[str] = Field(default_factory=list)
 
     def allows_url(self, url: str) -> bool:
@@ -62,6 +76,19 @@ def load_policy(path: Path) -> Policy:
     return Policy.model_validate(data)
 
 
+def _loaded_urls(surface: Surface) -> list[str]:
+    """Every URL this surface currently has loaded: `Surface.urls()` if the surface has one
+    (`WebSurface`: the shell plus every child frame), else the single `surface.url` a minimal
+    fake or `DesktopSurface` still provides -- the same "default it for fakes" pattern already
+    used for `dialog_events`, `screenshot_bytes`, `fill_bounds`, `tracing`, and `dom_snapshot`.
+    """
+    urls_method = getattr(surface, "urls", None)
+    if urls_method is None:
+        return [surface.url]
+    result: list[str] = urls_method()
+    return result
+
+
 class PolicyDecision(BaseModel):
     allowed: bool
     rule: str
@@ -71,6 +98,11 @@ class PolicyDecision(BaseModel):
     action_kind: str
     url: str | None
     role: str | None
+    # Every URL actually checked for this decision: [action.url] for a Navigate, or every URL
+    # Surface.urls() reports currently loaded (every frame, not just the shell) for anything
+    # else. `url` above stays a single readable value for logging/display; this is the full set
+    # a reviewer can use to see what was actually checked (docs/adr/0007's update).
+    checked_urls: list[str] = Field(default_factory=list)
 
 
 class PolicyDenied(Exception):
@@ -134,16 +166,33 @@ class PolicyGate:
 
         current_url = action.url if isinstance(action, Navigate) else surface.url
         role = element.role if element is not None else None
-        risk, risk_reason = classify(action, element, policy, url=current_url)
 
-        # 2. origin + route allowlist
-        if not policy.allows_url(current_url):
+        if isinstance(action, Navigate):
+            # The destination has not loaded yet; there is exactly one URL to check, the target.
+            checked_urls = [action.url]
+        else:
+            # Every URL actually loaded right now, across every frame -- not just surface.url,
+            # which in a frameset app is frequently the shell and never the page an action's
+            # element actually lives on (docs/adr/0005, docs/adr/0007's update). "about:blank" /
+            # "" is the absence of a navigation (Phase 5's rule), never a route to check.
+            checked_urls = [u for u in _loaded_urls(surface) if u not in ("about:blank", "")]
+
+        risk, risk_reason = classify(
+            action,
+            element,
+            policy,
+            url=action.url if isinstance(action, Navigate) else checked_urls,
+        )
+
+        # 2. origin + route allowlist: EVERY currently loaded URL must be allowed.
+        disallowed = [u for u in checked_urls if not policy.allows_url(u)]
+        if disallowed:
             decision = PolicyDecision(
                 allowed=False,
                 rule="allowlist",
                 reason=(
-                    f"{current_url!r} is not within an allowed origin+route "
-                    f"(allowed_origins={policy.allowed_origins}, "
+                    f"{disallowed!r} not within an allowed origin+route (checked "
+                    f"{checked_urls!r}; allowed_origins={policy.allowed_origins}, "
                     f"allowed_routes={policy.allowed_routes})"
                 ),
                 risk=risk.value,
@@ -151,6 +200,7 @@ class PolicyGate:
                 action_kind=action.kind,
                 url=current_url,
                 role=role,
+                checked_urls=checked_urls,
             )
             self._log(action, context, decision, element)
             raise PolicyDenied(decision)
@@ -169,6 +219,7 @@ class PolicyGate:
                 action_kind=action.kind,
                 url=current_url,
                 role=role,
+                checked_urls=checked_urls,
             )
             self._log(action, context, decision, element)
             raise PolicyDenied(decision)
@@ -193,6 +244,7 @@ class PolicyGate:
                 action_kind=action.kind,
                 url=current_url,
                 role=role,
+                checked_urls=checked_urls,
             )
             self._log(action, context, decision, element)
             raise PolicyDenied(decision)
@@ -212,6 +264,7 @@ class PolicyGate:
                         action_kind=action.kind,
                         url=current_url,
                         role=role,
+                        checked_urls=checked_urls,
                     )
                     self._log(action, context, decision, element)
                     raise PolicyDenied(decision)
@@ -228,6 +281,7 @@ class PolicyGate:
                     action_kind=action.kind,
                     url=current_url,
                     role=role,
+                    checked_urls=checked_urls,
                 )
                 self._log(action, context, decision, element)
                 raise EscalationRequired(decision)
@@ -247,6 +301,7 @@ class PolicyGate:
                     action_kind=action.kind,
                     url=current_url,
                     role=role,
+                    checked_urls=checked_urls,
                 )
                 self._log(action, context, decision, element)
                 raise PolicyDenied(decision)
@@ -264,6 +319,7 @@ class PolicyGate:
             action_kind=action.kind,
             url=current_url,
             role=role,
+            checked_urls=checked_urls,
         )
 
         # Logged AFTER executing (not before, as the refusal branches above have to be), so the

@@ -35,7 +35,11 @@ DEFAULT_MODEL = "gemini-3.1-flash-lite"
 # before still raising on the last attempt -- a per-day quota is not cleared by waiting seconds,
 # only by the day rolling over or GEMINI_MODEL pointing at a model with its own budget.
 _RETRYABLE_CODES = {429, 503}
-_MAX_ATTEMPTS = 5
+# Configurable (not just hardcoded) so a reviewer hitting the free tier's real per-minute shape
+# can widen the backoff without a code change; GEMINI_MODEL is still the only way to escape a
+# per-DAY quota, since no amount of waiting seconds clears that.
+_MAX_ATTEMPTS = int(os.environ.get("GEMINI_MAX_ATTEMPTS", "5"))
+_BASE_DELAY_S = float(os.environ.get("GEMINI_BASE_DELAY_S", "1"))
 
 
 class GeminiClient:
@@ -94,7 +98,7 @@ class GeminiClient:
                 retryable = getattr(exc, "code", None) in _RETRYABLE_CODES
                 if not retryable or attempt == _MAX_ATTEMPTS - 1:
                     raise
-                time.sleep((2**attempt) + random.uniform(0, 1))
+                time.sleep((_BASE_DELAY_S * (2**attempt)) + random.uniform(0, 1))
         if response is None:  # pragma: no cover - unreachable, loop always breaks or raises
             raise RuntimeError("Gemini call did not complete")
 
