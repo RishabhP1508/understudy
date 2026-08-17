@@ -413,7 +413,7 @@ def test_real_run_redacts_secret_and_ssn_from_run_log_and_artifact(tmp_path: Pat
         run_id="phase5-t4",
         model="fake-model",
         capability_id="update-the-password",
-        name="update the password",
+        policy=_permissive_policy(),
     )
     artifact_json = Redactor().dumps(capability, indent=2)
     _assert_no_sentinel_leak(artifact_json)
@@ -540,13 +540,17 @@ def test_every_policy_decision_is_logged_including_allows(tmp_path: Path) -> Non
 
 
 def test_real_artifact_round_trips_created_at_and_transcript_hash_intact() -> None:
+    """The real artifact's provenance timestamp predates Phase 8's rename (it was recorded under
+    the field name `created_at`; `Provenance.timestamp` now accepts that legacy key name too, so
+    the real historical value loads intact rather than defaulting away) and round-trips through
+    the new Redactor unredacted, under its new field name."""
     original = json.loads(ARTIFACT_PATH.read_text(encoding="utf-8"))
     capability = Capability.model_validate(original)
 
     redacted_json = Redactor().dumps(capability, indent=2)
     round_tripped = json.loads(redacted_json)
 
-    assert round_tripped["provenance"]["created_at"] == original["provenance"]["created_at"]
+    assert round_tripped["provenance"]["timestamp"] == original["provenance"]["created_at"]
     assert (
         round_tripped["provenance"]["transcript_hash"] == original["provenance"]["transcript_hash"]
     )

@@ -330,3 +330,51 @@ raises an error instead of going quietly dormant.
     second real run of the same goal text silently destroyed this project's own non-negotiable
     Phase 2 artifact, which turned out not to be recoverable at all. See
     `docs/adr/0011-artifacts-are-versioned-and-tests-never-pin-to-them.md`.
+
+## Phase 8 decisions
+
+62. `Capability` carries every field the brief grades: typed `InputParam`/`OutputField` lists, a
+    `Step.value` that is either a literal or a `ParamRef` naming a declared input, `known_outcomes`
+    and `recovery_rules` seeded from a starter library, and a `stability` signal that stays a
+    read-only observation, never a gate. `schema_version` (this file's own shape) and `version`
+    (this recording's own revision) are deliberately two different counters answering two
+    different reviewer questions. See `docs/adr/0012`.
+63. Postconditions are derived from `policy_decision.checked_urls` progression, in precedence
+    order (URL change first, then an extract step's own value, then the next step's target as a
+    reachability check, with the last step always taking the run's own success checkpoint), because
+    a true observation-diff needs a per-turn snapshot the evidence format does not yet carry. Why:
+    every one of a real recording's steps needs a verifiable postcondition for replay to check
+    against, not just the final one. See `docs/adr/0012`.
+64. `Observation.urls` (every loaded frame) exists so `url_matches` checks frame identity, not a
+    frameset's constant shell URL. Why: measured on this fixture, the shell stays `/app` on every
+    screen, so a page-level check would silently pass on the wrong one. See `docs/adr/0012`.
+65. Every schema field is marked STRUCTURAL or VALUE_CARRYING (`models/observation.py`), and
+    `Redactor` walks the live model tree to apply R3 (the whole-string credential-shaped-literal
+    rule) only to a VALUE_CARRYING field, never a STRUCTURAL one. Why: R3 alone destroyed a
+    checkpoint value `DONE_TOKEN` and a URL path `/secret-flow`, both real regressions this
+    measurably fixes; R1 and R2 still apply everywhere regardless of marking. See `docs/adr/0012`.
+66. `record/recorder.py`'s dead-end pruning groups CONSECUTIVE same-state events into one run
+    before pruning across runs, not raw events. Why: measured directly against the real recording,
+    a per-event version of this rule mistook ordinary sequential form-filling (typing a username,
+    then a password, both while the URL is still the login page) for a detour, and silently
+    dropped 3 of 7 real steps. See `docs/adr/0012`.
+67. `replay/engine.py` resolves a step's `ParamRef` and a checkpoint's `:name` placeholder through
+    one shared function, validates every required `InputParam` is present before any browser
+    launches, and registers a sensitive param's caller-supplied value with the run's `Redactor`
+    before the first event is even logged. Why: Phase 8 introduced `ParamRef` into the schema
+    without the executor to match, so a live replay typed the literal placeholder text into the
+    form and compared a checkpoint against a route template no real page can ever match --
+    shipping a schema feature and deferring its executor is not an option when doing so breaks the
+    phase's own deliverable. Measured live: replaying with a different member than the one
+    recording still fails, and earlier than expected -- not at the (also member-specific) success
+    checkpoint, but at a locator step whose recorded accessible name embeds the member id too, a
+    third place a single recording's literal leaks in that this phase's canonicalization does not
+    yet reach. See `docs/adr/0013`.
+68. A code-review pass on item 67 found four more correctness holes no test's synthetic data had
+    the right shape to expose: `record/recorder.py`'s dead-end pruning erased the action that
+    escapes a detour, not the detour itself; a pii-sensitivity Type was logged as a hardcoded mask
+    instead of a parameter reference the recorder could bind to; a pii-classified parameter still
+    carried the raw observed value in `example`; and checkpoint placeholder interpolation was a
+    sequential, prefix-unsafe `str.replace` chain rather than one regex pass. All four are fixed.
+    None changed the shipped artifact (verified by rebuilding it in memory and diffing field by
+    field against the file on disk). See `docs/adr/0013`.

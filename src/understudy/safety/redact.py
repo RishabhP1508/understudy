@@ -40,6 +40,23 @@ both directions at once, and neither fix is a special case for a particular sent
 a dict containing `"sensitivity": "secret"` has its `value`/`text` keys replaced with a parameter
 reference; `"sensitivity": "pii"` has them masked. This is what makes a serialized element safe
 with no keyword rule at all -- see docs/adr/0008.
+
+Phase 8 (D4, docs/adr/0012) adds a second, independent mechanism on top of the above: R3 (the
+whole-string credential-shaped-literal rule) is applied only to a field a schema author marked
+VALUE_CARRYING (`models/observation.FIELD_MARKING_KEY`); a field marked STRUCTURAL (an id, a
+role/name, an enum, a URL, a checkpoint's own target/value) is exempt from it, because R3's
+keyword match ("token" inside "DONE_TOKEN", "secret" inside "/secret-flow") does not know it is
+looking at a fixed identifier rather than a value, and destroyed both in earlier phases. R1
+(registered secret values) and R2 (named PII patterns) still apply to EVERY field regardless of
+marking: a real secret or PII value landing in a structural field must still be caught. This
+walks the ACTUAL pydantic model tree (not a pre-dumped plain dict), because that is the only way
+to know which field a given string came from; the moment the walk reaches an untyped `dict[str,
+Any]` (a `RunEvent`'s own `context`/`proposed_action`/`policy_decision`/... fields, or a bare dict
+with no model behind it at all, e.g. tests/test_constraints.py's own sentinel payload), there is
+no schema left to consult, so every string beneath that point falls back to VALUE_CARRYING --
+today's behaviour, unchanged. The residual limit: marking is only as good as the schema author's
+classification, and this fallback means a value the schema happens to keep in an untyped dict
+gets no field-level exemption at all (R3 still applies to it, same as before Phase 8).
 """
 
 from __future__ import annotations
@@ -47,12 +64,13 @@ from __future__ import annotations
 import io
 import json
 import re
-from typing import Any
+from typing import Any, Literal
 
 from PIL import Image, ImageDraw
 from pydantic import BaseModel
+from pydantic.fields import FieldInfo
 
-from understudy.models.observation import Observation, UIElement
+from understudy.models.observation import FIELD_MARKING_KEY, STRUCTURAL, Observation, UIElement
 
 _REDACTED = "[REDACTED]"
 
@@ -103,6 +121,21 @@ def slugify_param_name(name: str) -> str:
     return slug or "secret"
 
 
+def classify_field_sensitivity(field_name: str) -> Literal["none", "secret", "pii"]:
+    """Sensitivity of a DERIVED field/parameter name (record/canonicalize.py), reusing this
+    module's own two named-pattern tables instead of a second, separately maintained list of
+    PII/secret field-name keywords: `_CREDENTIAL_TOKENS` (R3's vocabulary) for "secret",
+    `_PII_PATTERNS`'s own key names (ssn, card_number, account_number, dob, email, phone) for
+    "pii", matched as a case-insensitive substring of the field name itself.
+    """
+    lowered = field_name.lower()
+    if any(token in lowered for token in _CREDENTIAL_TOKENS):
+        return "secret"
+    if any(key in lowered for key in _PII_PATTERNS):
+        return "pii"
+    return "none"
+
+
 def _is_param_reference(value: str) -> bool:
     return bool(_PARAM_REF_RE.fullmatch(value))
 
@@ -142,29 +175,33 @@ class Redactor:
         if value:
             self._registered_values.add(value)
 
-    def redact_text(self, value: str) -> str:
+    def redact_text(self, value: str, *, value_carrying: bool = True) -> str:
+        """`value_carrying=True` (the default) is today's behaviour: every rule applies, which is
+        what every caller that hands this a raw string with no schema behind it -- a DOM
+        snapshot, a bare dict with no model, capture_failure's HTML -- still gets (D4's residual
+        limit). A model-tree walk (`_redact_any` below) passes `value_carrying=False` for a field
+        a schema author marked STRUCTURAL, which skips R3 only; R0-R2 are unconditional.
+        """
         if _is_param_reference(value):
             return value  # R0: a placeholder, not a value
         text = value
-        for registered in self._registered_values:  # R1
+        for registered in self._registered_values:  # R1 -- every field, regardless of marking
             if registered and registered in text:
                 text = text.replace(registered, _REDACTED)
-        for pattern in _PII_PATTERNS.values():  # R2
+        for pattern in _PII_PATTERNS.values():  # R2 -- every field, regardless of marking
             text = pattern.sub(_REDACTED, text)
-        if _is_credential_shaped_literal(text):  # R3
+        if value_carrying and _is_credential_shaped_literal(text):  # R3 -- VALUE_CARRYING only
             return _REDACTED
         return text
 
-    def _redact_value(self, value: Any) -> Any:
-        if isinstance(value, str):
-            return self.redact_text(value)
-        if isinstance(value, dict):
-            return self._redact_dict(value)
-        if isinstance(value, (list, tuple)):
-            return [self._redact_value(item) for item in value]
-        return value
-
-    def _redact_dict(self, value: dict[str, Any]) -> dict[str, Any]:
+    def _sensitivity_marked_dict(self, value: dict[str, Any]) -> dict[str, Any] | None:
+        """The pre-Phase-8 field-level mechanism, unchanged: a dict carrying its own
+        `"sensitivity": "secret"/"pii"` key has its `value`/`text` keys replaced outright
+        (a parameter reference, or a full mask), independent of R3 and of D4's marking -- this is
+        how a serialized `UIElement`/similar stays safe with no keyword rule at all (docs/adr/0008).
+        Returns None (nothing to do here) when `value` carries no such key, so the caller falls
+        through to ordinary per-key recursion.
+        """
         sensitivity = value.get("sensitivity")
         if sensitivity == "secret":
             slug = slugify_param_name(str(value.get("name") or "secret"))
@@ -172,22 +209,89 @@ class Redactor:
         elif sensitivity == "pii":
             replacement = _REDACTED
         else:
-            replacement = None
-
+            return None
         redacted: dict[str, Any] = {}
         for key, item in value.items():
-            if replacement is not None and key in ("value", "text") and isinstance(item, str):
+            if key in ("value", "text") and isinstance(item, str):
                 redacted[key] = replacement
             else:
-                redacted[key] = self._redact_value(item)
+                redacted[key] = self._redact_any(item, value_carrying=True)
         return redacted
+
+    def _redact_any(self, value: Any, *, value_carrying: bool) -> Any:
+        """Redact an already-DUMPED Python value (a plain str/dict/list/tuple -- never a live
+        BaseModel; see `_redact_field` for why). Used both for a plain, schema-less structure
+        (where `value_carrying` is always True -- D4's residual limit) and for anything beneath a
+        field whose own marking has already been decided by the caller.
+        """
+        if isinstance(value, str):
+            return self.redact_text(value, value_carrying=value_carrying)
+        if isinstance(value, dict):
+            sensitivity_result = self._sensitivity_marked_dict(value)
+            if sensitivity_result is not None:
+                return sensitivity_result
+            return {k: self._redact_any(v, value_carrying=value_carrying) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [self._redact_any(item, value_carrying=value_carrying) for item in value]
+        return value
+
+    def _redact_field(self, live: Any, dumped: Any, *, value_carrying: bool) -> Any:
+        """`dumped` is this field's own value from `obj.model_dump(mode="json")` -- already
+        reflecting any `field_serializer`, alias, or JSON-mode conversion pydantic itself applies
+        (e.g. TargetDescriptor.confidence's rounding, D6), so it is what actually gets redacted
+        and returned. `live` is the SAME field's raw attribute, consulted ONLY to detect a nested
+        BaseModel (or a list of them) worth recursing into for ITS OWN field markings -- `live`'s
+        VALUES are never read directly, only its shape.
+        """
+        if isinstance(live, BaseModel):
+            return self._redact_model_instance(live)
+        if isinstance(live, (list, tuple)) and isinstance(dumped, list):
+            return [
+                self._redact_field(lv, dv, value_carrying=value_carrying)
+                if isinstance(lv, BaseModel)
+                else self._redact_any(dv, value_carrying=value_carrying)
+                for lv, dv in zip(live, dumped, strict=True)
+            ]
+        return self._redact_any(dumped, value_carrying=value_carrying)
+
+    @staticmethod
+    def _field_marking(field: FieldInfo) -> str | None:
+        extra = field.json_schema_extra
+        if isinstance(extra, dict):
+            marking = extra.get(FIELD_MARKING_KEY)
+            if isinstance(marking, str):
+                return marking
+        return None
+
+    def _redact_model_instance(self, obj: BaseModel) -> dict[str, Any]:
+        """Walk `obj`'s OWN declared fields (never a pre-dumped plain dict, which would already
+        have lost this type information) for D4's field markings, while reading actual VALUES
+        from `obj.model_dump(mode="json")` so no pydantic-level serialization is bypassed. Extra
+        fields (`model_config = {"extra": "allow"}`, e.g. RunEvent's ad hoc kwargs) have no
+        declared FieldInfo and therefore no marking at all -- D4's residual limit, unchanged
+        behaviour from before this phase.
+        """
+        dumped = obj.model_dump(mode="json")
+        result: dict[str, Any] = {}
+        for name, field in type(obj).model_fields.items():
+            marking = self._field_marking(field)
+            value_carrying = marking != STRUCTURAL
+            result[name] = self._redact_field(
+                getattr(obj, name), dumped.get(name), value_carrying=value_carrying
+            )
+        extra = getattr(obj, "model_extra", None) or {}
+        for name in extra:
+            result[name] = self._redact_any(dumped.get(name), value_carrying=True)
+        return result
 
     def redact_model(self, obj: BaseModel) -> dict[str, Any]:
-        redacted: dict[str, Any] = self._redact_value(obj.model_dump(mode="json"))
-        return redacted
+        return self._redact_model_instance(obj)
 
     def dumps(self, obj: Any, *, indent: int | None = None) -> str:
-        payload = self.redact_model(obj) if isinstance(obj, BaseModel) else self._redact_value(obj)
+        if isinstance(obj, BaseModel):
+            payload: Any = self._redact_model_instance(obj)
+        else:
+            payload = self._redact_any(obj, value_carrying=True)
         return json.dumps(payload, indent=indent)
 
 

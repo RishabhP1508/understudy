@@ -12,12 +12,12 @@ from typing import Annotated, Literal, Protocol
 
 from pydantic import BaseModel, Field
 
-from understudy.models.observation import Observation
+from understudy.models.observation import STRUCTURAL_EXTRA, VALUE_CARRYING_EXTRA, Observation
 
 
 class Navigate(BaseModel):
     kind: Literal["navigate"] = "navigate"
-    url: str
+    url: str = Field(json_schema_extra=STRUCTURAL_EXTRA)
 
 
 class Click(BaseModel):
@@ -28,7 +28,10 @@ class Click(BaseModel):
 class Type(BaseModel):
     kind: Literal["type"] = "type"
     node_id: str
-    text: str
+    # D4 (Phase 8): what was actually typed, subject to R3's whole-string credential-shaped-
+    # literal rule -- marked explicitly (VALUE_CARRYING is also the default for an unmarked
+    # field, but this documents the intent rather than relying on a reader knowing that).
+    text: str = Field(json_schema_extra=VALUE_CARRYING_EXTRA)
 
 
 class Select(BaseModel):

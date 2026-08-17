@@ -1,0 +1,314 @@
+{
+  "schema_version": 2,
+  "version": 2,
+  "capability_id": "look-up-member-12345-and-read-their-current-savings-balance",
+  "name": "get_member_savings_balance",
+  "description": "Logs into the member portal, searches for a specific member by ID, and retrieves their current savings balance.",
+  "target": {
+    "app_id": "legacy_bank",
+    "entry_point": "http://127.0.0.1:5055/login",
+    "tenant_id": null,
+    "app_fingerprint": null
+  },
+  "inputs": [
+    {
+      "name": "password",
+      "type": "string",
+      "required": true,
+      "description": "the value typed into 'Password'",
+      "example": null,
+      "sensitivity": "secret"
+    },
+    {
+      "name": "member_id",
+      "type": "integer",
+      "required": true,
+      "description": "the value typed into 'Member ID'",
+      "example": "12345",
+      "sensitivity": "none"
+    }
+  ],
+  "outputs": [
+    {
+      "name": "savings_balance",
+      "type": "string",
+      "description": "The current monetary balance found in the member's savings account.",
+      "source_step_id": "6"
+    }
+  ],
+  "steps": [
+    {
+      "id": "0",
+      "index": 0,
+      "action": "type",
+      "target": {
+        "role": "textbox",
+        "name": "Username",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [],
+        "ordinal": 0,
+        "relational": {
+          "kind": "row_label",
+          "label": "Username"
+        },
+        "dom_fallback": null,
+        "confidence": 0.5,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
+      },
+      "value": "admin",
+      "precondition": null,
+      "postcondition": {
+        "kind": "element_present",
+        "target": "textbox",
+        "value": "Password"
+      },
+      "risk_class": "SAFE_REVERSIBLE",
+      "rationale": "Type 'admin' into Username field.",
+      "on_failure": null
+    },
+    {
+      "id": "1",
+      "index": 1,
+      "action": "type",
+      "target": {
+        "role": "textbox",
+        "name": "Password",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [],
+        "ordinal": 1,
+        "relational": {
+          "kind": "row_label",
+          "label": "Password"
+        },
+        "dom_fallback": null,
+        "confidence": 0.5,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
+      },
+      "value": {
+        "kind": "param_ref",
+        "name": "password"
+      },
+      "precondition": null,
+      "postcondition": {
+        "kind": "element_present",
+        "target": "button",
+        "value": "Login"
+      },
+      "risk_class": "SAFE_REVERSIBLE",
+      "rationale": "Type '[REDACTED]' into Password field.",
+      "on_failure": null
+    },
+    {
+      "id": "2",
+      "index": 2,
+      "action": "click",
+      "target": {
+        "role": "button",
+        "name": "Login",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [],
+        "ordinal": null,
+        "relational": null,
+        "dom_fallback": null,
+        "confidence": 0.9,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
+      },
+      "value": null,
+      "precondition": null,
+      "postcondition": {
+        "kind": "url_matches",
+        "target": "any_frame",
+        "value": "http://127.0.0.1:5055/members"
+      },
+      "risk_class": "SAFE_REVERSIBLE",
+      "rationale": "Click Login button to log into the application.",
+      "on_failure": null
+    },
+    {
+      "id": "3",
+      "index": 3,
+      "action": "type",
+      "target": {
+        "role": "textbox",
+        "name": "Member ID",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": null,
+        "relational": {
+          "kind": "row_label",
+          "label": "Member ID"
+        },
+        "dom_fallback": null,
+        "confidence": 0.65,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
+      },
+      "value": {
+        "kind": "param_ref",
+        "name": "member_id"
+      },
+      "precondition": null,
+      "postcondition": {
+        "kind": "element_present",
+        "target": "button",
+        "value": "Search"
+      },
+      "risk_class": "SAFE_REVERSIBLE",
+      "rationale": "Enter Member ID 12345 into the Member ID search box.",
+      "on_failure": null
+    },
+    {
+      "id": "4",
+      "index": 4,
+      "action": "click",
+      "target": {
+        "role": "button",
+        "name": "Search",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": null,
+        "relational": {
+          "kind": "row_label",
+          "label": "Member ID"
+        },
+        "dom_fallback": null,
+        "confidence": 0.95,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
+      },
+      "value": null,
+      "precondition": null,
+      "postcondition": {
+        "kind": "url_matches",
+        "target": "any_frame",
+        "value": "http://127.0.0.1:5055/members?f7=:member_id"
+      },
+      "risk_class": "SAFE_REVERSIBLE",
+      "rationale": "Click Search button to look up member 12345.",
+      "on_failure": null
+    },
+    {
+      "id": "5",
+      "index": 5,
+      "action": "click",
+      "target": {
+        "role": "link",
+        "name": "12345 - Testuser Alpha",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": null,
+        "relational": null,
+        "dom_fallback": null,
+        "confidence": 0.9,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
+      },
+      "value": null,
+      "precondition": null,
+      "postcondition": {
+        "kind": "url_matches",
+        "target": "any_frame",
+        "value": "http://127.0.0.1:5055/member/:member_id/balance"
+      },
+      "risk_class": "SAFE_REVERSIBLE",
+      "rationale": "Click on member link '12345 - Testuser Alpha' to view member details.",
+      "on_failure": null
+    },
+    {
+      "id": "6",
+      "index": 6,
+      "action": "extract",
+      "target": {
+        "role": "generic",
+        "name": "Savings Balance",
+        "name_match": "exact",
+        "scope": [
+          [
+            "iframe",
+            "Savings Balance"
+          ]
+        ],
+        "frame_path": [
+          "contentframe",
+          "/member/12345/balance"
+        ],
+        "ordinal": null,
+        "relational": {
+          "kind": "row_label",
+          "label": "Savings Balance"
+        },
+        "dom_fallback": null,
+        "confidence": 0.65,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
+      },
+      "value": "savings_balance",
+      "precondition": null,
+      "postcondition": {
+        "kind": "text_present",
+        "target": "page",
+        "value": "$1,204.55"
+      },
+      "risk_class": "SAFE_REVERSIBLE",
+      "rationale": "Extract the current savings balance for member 12345.",
+      "on_failure": null
+    }
+  ],
+  "success": {
+    "kind": "text_present",
+    "target": "page",
+    "value": "$1,204.55"
+  },
+  "known_outcomes": [
+    {
+      "code": "member_not_found",
+      "detector": "member_lookup_no_match",
+      "terminal": true,
+      "message_template": "No member found for the given id."
+    },
+    {
+      "code": "insufficient_funds",
+      "detector": "balance_check",
+      "terminal": true,
+      "message_template": "The account does not have enough balance for this action."
+    }
+  ],
+  "recovery_rules": [
+    {
+      "id": "dismiss_unexpected_dialog",
+      "trigger": "a native confirm/alert/prompt dialog appears mid-flow",
+      "action": "dismiss",
+      "max_attempts": 1
+    },
+    {
+      "id": "reauth_on_session_expiry",
+      "trigger": "the app redirects back to a login page mid-flow",
+      "action": "reauth",
+      "max_attempts": 1
+    },
+    {
+      "id": "wait_on_slow_load",
+      "trigger": "the target element has not appeared yet and the page is still loading",
+      "action": "wait",
+      "max_attempts": 3
+    }
+  ],
+  "provenance": {
+    "run_id": "b2405e162ba4",
+    "model": "gemini-3.6-flash",
+    "timestamp": "2026-08-17T18:59:05.189651+00:00",
+    "code_sha": null,
+    "perception_version": 2,
+    "transcript_hash": "c0fb251a4f094c8cdda1ce82f8d6133ff84b882d930c6330f8fa009d00e4eb10"
+  },
+  "status": "draft",
+  "stability": null
+}

@@ -399,7 +399,13 @@ class WebSurface:
         self._resolve_frame_paths(elements, refs, parents)
         self._resolve_attr_names(elements, refs)
         self._attach_ancestors(elements, parents)
-        return Observation(url=self._page.url, title=self._page.title(), elements=elements)
+        # D3 (Phase 8): every currently loaded URL, shell plus every child frame -- the same
+        # values `urls()` reports and `PolicyGate.dispatch` already checks -- so a `url_matches`
+        # checkpoint can be verified against the real screen identity (a child frame) rather than
+        # a frameset's constant shell URL (docs/adr/0005).
+        return Observation(
+            url=self._page.url, title=self._page.title(), elements=elements, urls=self.urls()
+        )
 
     def act(self, action: Action) -> str | None:
         if isinstance(action, Navigate):

@@ -8,13 +8,14 @@ so that boundary is obviously true by inspection, not just true today.
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from pathlib import Path
 from typing import Any
 
 from understudy.evidence.logger import EvidenceLogger
-from understudy.models.artifact import Capability, Checkpoint, Step, checkpoint_satisfied
+from understudy.models.artifact import Capability, Checkpoint, ParamRef, Step, checkpoint_satisfied
 from understudy.models.observation import PERCEPTION_VERSION, Observation, UIElement
 from understudy.models.result import FailureCategory, HardFailure, ReplayResult, Success
 from understudy.safety.policy import (
@@ -31,15 +32,86 @@ from understudy.surface.web import WebSurface
 _PolicyException = (PolicyDenied, EscalationRequired, NavigationBlocked)
 
 
-def _action_for_step(step: Step, node_id: str | None) -> Action:
+def _missing_required_params(capability: Capability, params: dict[str, Any]) -> list[str]:
+    """Every declared `InputParam` the capability requires that the caller's own `params` did not
+    supply. Checked once, up front, before anything else runs (R3: replay is given "an artifact
+    AND input parameters"; a required one missing is not a runtime condition to discover mid-run,
+    it is an invalid request)."""
+    return sorted(
+        param.name for param in capability.inputs if param.required and param.name not in params
+    )
+
+
+def _resolve_param(name: str, params: dict[str, Any]) -> str:
+    """The one place a declared input parameter's caller-supplied value becomes a literal string
+    -- used both for a Step's own `ParamRef` value (`_resolve_step_value`) and for a `:name`
+    placeholder embedded in a canonicalized Checkpoint URL (`_resolve_checkpoint`), so the two can
+    never disagree about what a given name means. Raises with a debuggable message (never a bare
+    `KeyError`) rather than crashing if `name` was never validated present -- reachable only for
+    an OPTIONAL param a step still references but the caller omitted, since every REQUIRED param a
+    capability declares is already checked present before any step runs
+    (`_missing_required_params`).
+    """
+    if name not in params:
+        raise KeyError(f"capability references parameter {name!r}, which was not supplied")
+    return str(params[name])
+
+
+def _resolve_step_value(
+    value: str | int | float | bool | ParamRef | None, params: dict[str, Any]
+) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, ParamRef):
+        return _resolve_param(value.name, params)
+    return str(value)
+
+
+_PLACEHOLDER_RE = re.compile(r":(\w+)")
+
+
+def _resolve_checkpoint(
+    checkpoint: Checkpoint, capability: Capability, params: dict[str, Any]
+) -> Checkpoint:
+    """Replace every `:name` route placeholder `record/canonicalize.py`'s `canonicalize_route`
+    embedded in this checkpoint's own value with the caller's resolved parameter, via the SAME
+    `_resolve_param` a Step's own value goes through -- a checkpoint and the step whose value it
+    is checking the effect of can never disagree about what `:member_id` means. A declared param
+    absent from `params` (only possible for an optional one; every required one is already
+    validated present) is simply left un-interpolated rather than raising: the placeholder then
+    will not match a real URL, which correctly becomes a postcondition/checkpoint failure instead
+    of a crash.
+
+    ONE regex pass over `:(\\w+)`, never a sequence of `str.replace` calls keyed off each
+    declared param name: an ordered sequence is prefix-unsafe (with params `id` and `id_long`,
+    replacing `:id` first also corrupts `:id_long`'s own leading `:id`, regardless of which order
+    the declared params happen to be iterated in). `\\w+` always matches the full identifier
+    greedily, so `:id_long` resolves as one name in one step, never as `:id` plus a leftover
+    `_long`.
+    """
+    declared = {param.name for param in capability.inputs}
+
+    def _replace(match: re.Match[str]) -> str:
+        name = match.group(1)
+        if name in declared and name in params:
+            return _resolve_param(name, params)
+        return match.group(0)  # not a declared, supplied param name: leave untouched
+
+    value = _PLACEHOLDER_RE.sub(_replace, checkpoint.value)
+    if value == checkpoint.value:
+        return checkpoint
+    return checkpoint.model_copy(update={"value": value})
+
+
+def _action_for_step(step: Step, node_id: str | None, params: dict[str, Any]) -> Action:
     if step.action == "navigate":
-        return Navigate(url=step.value or "")
+        return Navigate(url=_resolve_step_value(step.value, params))
     if step.action == "click":
         return Click(node_id=node_id or "")
     if step.action == "type":
-        return Type(node_id=node_id or "", text=step.value or "")
+        return Type(node_id=node_id or "", text=_resolve_step_value(step.value, params))
     if step.action == "select":
-        return Select(node_id=node_id or "", value=step.value or "")
+        return Select(node_id=node_id or "", value=_resolve_step_value(step.value, params))
     if step.action in ("read_text", "extract"):
         return ReadText(node_id=node_id or "")
     raise ValueError(f"unsupported step action: {step.action!r}")
@@ -148,12 +220,48 @@ def replay(
     allow_risky: bool = False,
     evidence_base_dir: str | Path = "evidence",
 ) -> ReplayResult:
-    # params is accepted for parity with the Phase 8 contract; this phase has no step
-    # parameterization yet, so it is unused below.
     capability = Capability.model_validate_json(artifact_path.read_text(encoding="utf-8"))
-    policy = load_policy(policy_path)
     run_id = uuid.uuid4().hex[:12]
     logger = EvidenceLogger(run_id, "replay", base_dir=evidence_base_dir)
+    result: ReplayResult | None = None
+
+    # Register every sensitive declared param's caller-supplied value BEFORE any logging happens
+    # -- exactly what PolicyGate._log already does for a live Type action's own resolved text --
+    # so a raw secret/PII value the caller passed in `params` never appears in run.jsonl, even
+    # inside this run's own bootstrap "replay_start" event below.
+    for param in capability.inputs:
+        if param.sensitivity in ("secret", "pii") and param.name in params:
+            logger.redactor.register_secret(str(params[param.name]))
+
+    logger.event(
+        "replay_start",
+        capability_id=capability.capability_id,
+        version=capability.version,
+        params=params,
+    )
+
+    missing = _missing_required_params(capability, params)
+    if missing:
+        # R3/D-defect-1: a required parameter the capability declares but the caller did not
+        # supply is an invalid request, checked before step 0 (indeed before a browser is even
+        # launched) -- never a silently-typed empty string, never a raw crash.
+        expected = sorted(param.name for param in capability.inputs if param.required)
+        result = HardFailure(
+            step_id=None,
+            category=FailureCategory.INVALID_PARAMS,
+            expected=f"required parameter(s) {expected}",
+            observed=f"missing {missing}; given {sorted(params)}",
+        )
+        logger.event(
+            "hard_failure",
+            step_id=None,
+            category=FailureCategory.INVALID_PARAMS.value,
+            note=result.observed,
+        )
+        logger.write_result(result)
+        return result
+
+    policy = load_policy(policy_path)
     gate = PolicyGate(
         policy,
         logger,
@@ -164,14 +272,7 @@ def replay(
     surface = WebSurface(policy=policy, headless=False)
     outputs: dict[str, str] = {}
     start = time.monotonic()
-    result: ReplayResult | None = None
 
-    logger.event(
-        "replay_start",
-        capability_id=capability.capability_id,
-        version=capability.version,
-        params=params,
-    )
     logger.start_trace(surface)
     try:
         try:
@@ -254,7 +355,7 @@ def replay(
                 element = resolution.element
 
             try:
-                action = _action_for_step(step, node_id)
+                action = _action_for_step(step, node_id, params)
                 result_text = gate.dispatch(
                     surface,
                     action,
@@ -304,7 +405,9 @@ def replay(
                 return result
 
             if step.action == "extract":
-                outputs[step.value or f"output_{step.index}"] = result_text or ""
+                outputs[_resolve_step_value(step.value, params) or f"output_{step.index}"] = (
+                    result_text or ""
+                )
 
             # D7 (Phase 5, extended Phase 6): the action just changed the page, so the 'after'
             # screenshot and the postcondition check both need a FRESH observation, never
@@ -314,41 +417,47 @@ def replay(
             logger.screenshot(surface, step.index, "after", after_observation)
 
             postcondition = step.postcondition
-            if postcondition is not None and not checkpoint_satisfied(
-                after_observation, postcondition
-            ):
-                refs = _capture_failure_evidence(logger, surface, step.index, before_path)
-                logger.event(
-                    "hard_failure", step_id=step.index,
-                    category=FailureCategory.POSTCONDITION_FAILED.value,
-                    note="postcondition not satisfied",
-                )
-                result = HardFailure(
-                    step_id=step.index,
-                    category=FailureCategory.POSTCONDITION_FAILED,
-                    expected=postcondition.value,
-                    observed="postcondition not satisfied",
-                    evidence_refs=refs,
-                )
-                return result
+            if postcondition is not None:
+                # D-defect-2: a canonicalized `:name` placeholder (record/canonicalize.py) is
+                # resolved against the caller's own params before evaluation, through the SAME
+                # `_resolve_param` a step's own value goes through, so the two can never disagree
+                # about what `:member_id` means.
+                resolved_postcondition = _resolve_checkpoint(postcondition, capability, params)
+                if not checkpoint_satisfied(after_observation, resolved_postcondition):
+                    refs = _capture_failure_evidence(logger, surface, step.index, before_path)
+                    logger.event(
+                        "hard_failure",
+                        step_id=step.index,
+                        category=FailureCategory.POSTCONDITION_FAILED.value,
+                        note="postcondition not satisfied",
+                    )
+                    result = HardFailure(
+                        step_id=step.index,
+                        category=FailureCategory.POSTCONDITION_FAILED,
+                        expected=resolved_postcondition.value,
+                        observed="postcondition not satisfied",
+                        evidence_refs=refs,
+                    )
+                    return result
 
         # The last step's own 'after' observation (if any step ran) is already fresh; reusing it
         # avoids a third observe() call this step never needed to make on top of the two above.
         final_observation = (
             after_observation if after_observation is not None else surface.observe()
         )
-        checkpoint_verified = checkpoint_satisfied(final_observation, capability.success)
+        resolved_success = _resolve_checkpoint(capability.success, capability, params)
+        checkpoint_verified = checkpoint_satisfied(final_observation, resolved_success)
         logger.event(
             "replay_end",
             phase="verify",
-            checkpoint_eval=capability.success.model_dump(),
+            checkpoint_eval=resolved_success.model_dump(),
             outcome_match=str(checkpoint_verified),
             outputs=outputs,
         )
         steps_run = len(capability.steps)
         duration_ms = (time.monotonic() - start) * 1000
         result = _finish_result(
-            checkpoint_verified, capability.success, outputs, steps_run, duration_ms
+            checkpoint_verified, resolved_success, outputs, steps_run, duration_ms
         )
         if isinstance(result, HardFailure):
             # _finish_result has no Surface to capture evidence from; attach it here.
