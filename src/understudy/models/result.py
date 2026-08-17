@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 
 
 class FailureCategory(StrEnum):
-    """Exactly ten values. Three of them exist because a single message,
+    """Eleven values. Three of the first ten exist because a single message,
     "could not resolve the target for step 0", was measured (Phase 3) coming from two
     unrelated causes -- a dead fixture server and a stale artifact -- and a caller cannot act on
     a failure it cannot tell apart. See docs/adr/0009 for the full reasoning and the classifier.
@@ -54,6 +54,11 @@ class FailureCategory(StrEnum):
       "session and timeout expiry").
     - UNHANDLED_DIALOG: a native or in-app confirmation dialog appeared that recovery did not
       recognize (R3's "unexpected confirmation dialogs").
+    - INVALID_PARAMS: the caller's own `params` do not satisfy the capability's declared
+      `InputParam`s (a required one is missing). Checked before the entry-point navigate even
+      runs (Phase 8's D-defect-1 fix): there is no point launching a browser for a request that
+      cannot possibly succeed, and typing a missing parameter's placeholder text literally into a
+      live form is worse than refusing up front.
 
     PERMISSION_DENIED, SESSION_EXPIRED, and UNHANDLED_DIALOG have no detector wired to them yet --
     that is Phase 9's recovery/outcome taxonomy. The category exists now because the result
@@ -72,6 +77,7 @@ class FailureCategory(StrEnum):
     PERMISSION_DENIED = "permission_denied"
     SESSION_EXPIRED = "session_expired"
     UNHANDLED_DIALOG = "unhandled_dialog"
+    INVALID_PARAMS = "invalid_params"
 
 
 class Success(BaseModel):

@@ -11,10 +11,10 @@ from typing import Annotated
 import typer
 from google.genai import errors
 
-from understudy.agent.loop import run
+from understudy.agent.loop import RunOutcome, run
 from understudy.config import load_settings
 from understudy.evidence.logger import EvidenceLogger
-from understudy.llm.base import build_llm
+from understudy.llm.base import LLMClient, build_llm
 from understudy.record.recorder import build_capability
 from understudy.replay import engine as replay_engine
 from understudy.safety.policy import (
@@ -25,9 +25,12 @@ from understudy.safety.policy import (
     load_policy,
 )
 from understudy.safety.redact import Redactor
+from understudy.surface.base import Surface
 from understudy.surface.web import WebSurface
 
 app = typer.Typer(add_completion=False)
+
+_DISCOVERY_POLICY_STOPS = (EscalationRequired, NavigationBlocked, PolicyDenied)
 
 
 def _slugify(text: str) -> str:
@@ -58,6 +61,63 @@ def _policy_exception_message(exc: EscalationRequired | NavigationBlocked | Poli
     if isinstance(exc, NavigationBlocked):
         return f"navigation left the allowlist: {exc.urls}"
     return f"{exc.decision.rule}: {exc.decision.reason}"
+
+
+def _write_error_result(logger: EvidenceLogger, exc: BaseException) -> None:
+    """D7: whatever kind of death `discover` suffers, it leaves a `result.json` behind, not just
+    a stack trace -- `evidence/discovery-a3a4a2fc6000` (two events, no terminal record at all) is
+    exactly the failure mode this closes. Goes through the same Redactor every other write does
+    (ARCHITECTURE.md decision 10); not built through `EvidenceLogger.write_result`, which requires
+    a `BaseModel`, because there is no ReplayResult-shaped model for a discovery-time death.
+    """
+    payload = {"status": "error", "error": type(exc).__name__, "reason": str(exc)}
+    (logger.dir / "result.json").write_text(
+        logger.redactor.dumps(payload, indent=2), encoding="utf-8"
+    )
+
+
+def _discover_and_capture(
+    goal: str,
+    target: str,
+    surface: Surface,
+    llm: LLMClient,
+    gate: PolicyGate,
+    logger: EvidenceLogger,
+    max_steps: int,
+    timeout_s: float,
+    stall_limit: int,
+    full_render_every: int,
+) -> RunOutcome:
+    """D7: however `run()` dies -- a Gemini API error, a policy stop, or anything else entirely
+    unexpected -- a terminal `run_end` event and a `result.json` exist before the exception
+    propagates. `evidence/discovery-a3a4a2fc6000` (two events, no terminal record at all) is
+    exactly the failure mode this closes: it died inside `llm.complete()` with no handler for
+    that at all. Extracted from `discover()` (the typer command) so this failure-handling
+    machinery is directly testable against fakes, with no real browser and no network required.
+    A run that completes (including one whose OWN stopping condition already logged its own
+    `run_end`, e.g. `max_steps`) never reaches the `except` below at all.
+    """
+    try:
+        return run(
+            goal=goal,
+            target=target,
+            surface=surface,
+            llm=llm,
+            gate=gate,
+            logger=logger,
+            max_steps=max_steps,
+            timeout_s=timeout_s,
+            stall_limit=stall_limit,
+            full_render_every=full_render_every,
+        )
+    except Exception as exc:
+        if isinstance(exc, _DISCOVERY_POLICY_STOPS):
+            status, reason = "policy_stopped", _policy_exception_message(exc)
+        else:
+            status, reason = "error", str(exc)
+        logger.event("run_end", status=status, error=type(exc).__name__, reason=reason)
+        _write_error_result(logger, exc)
+        raise
 
 
 @app.command()
@@ -108,7 +168,7 @@ def discover(
     logger.start_trace(surface)
     outcome = None
     try:
-        outcome = run(
+        outcome = _discover_and_capture(
             goal=goal,
             target=resolved_target,
             surface=surface,
@@ -126,15 +186,13 @@ def discover(
             "Set GEMINI_MODEL to another model or wait for the quota to reset."
         )
         raise typer.Exit(1) from None
-    except (EscalationRequired, NavigationBlocked, PolicyDenied) as exc:
-        message = _policy_exception_message(exc)
+    except _DISCOVERY_POLICY_STOPS as exc:
         # replay/engine.py logs the equivalent of this into its own run.jsonl (a hard_failure
         # event carrying the same reason) because a policy stop there has to be a returned
         # result, not a raised exception. Discovery's stop is a raised exception by design (R6:
-        # a human needs to see and act on it), but the evidence trail should not go dark just
-        # because the run ends via an exception instead of a return.
-        logger.event("run_end", status="policy_stopped", reason=message)
-        typer.echo(f"discovery stopped by policy: {message}")
+        # a human needs to see and act on it); `_discover_and_capture` already wrote the
+        # terminal event and result.json before re-raising this.
+        typer.echo(f"discovery stopped by policy: {_policy_exception_message(exc)}")
         raise typer.Exit(1) from None
     finally:
         logger.stop_trace(surface, keep=(outcome is None or outcome.status != "goal_verified"))
@@ -164,7 +222,8 @@ def discover(
         run_id=run_id,
         model=model_name,
         capability_id=slug,
-        name=goal,
+        policy=policy_obj,
+        llm=llm,
     )
     artifacts_dir = Path("artifacts")
     artifacts_dir.mkdir(exist_ok=True)

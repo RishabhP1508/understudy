@@ -17,9 +17,9 @@ import re
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 
-from understudy.models.observation import Observation, UIElement
+from understudy.models.observation import STRUCTURAL_EXTRA, Observation, UIElement
 
 # ADR 0004: a container has no caption of its own. Climbing through one to find a relational
 # label would attach an unrelated outer row's caption to an inner control, so describe() never
@@ -36,7 +36,9 @@ class RelationalHint(BaseModel):
     """
 
     kind: Literal["row_label"] = "row_label"
-    label: str
+    # The captured neighbouring caption: the same kind of value as UIElement.name, so it is
+    # structural in the same D4 (Phase 8) sense -- a label the app itself rendered, not a value.
+    label: str = Field(json_schema_extra=STRUCTURAL_EXTRA)
 
 
 class TargetDescriptor(BaseModel):
@@ -46,16 +48,32 @@ class TargetDescriptor(BaseModel):
     what gets written into and read back out of a Capability's steps.
     """
 
-    role: str
-    name: str = ""
-    name_match: Literal["exact", "normalized", "regex"] = "exact"
-    scope: list[tuple[str, str]] = Field(default_factory=list)  # ancestor hints, outermost first
-    frame_path: list[str] = Field(default_factory=list)
+    role: str = Field(json_schema_extra=STRUCTURAL_EXTRA)
+    name: str = Field(default="", json_schema_extra=STRUCTURAL_EXTRA)
+    name_match: Literal["exact", "normalized", "regex"] = Field(
+        default="exact", json_schema_extra=STRUCTURAL_EXTRA
+    )
+    scope: list[tuple[str, str]] = Field(
+        default_factory=list, json_schema_extra=STRUCTURAL_EXTRA
+    )  # ancestor hints, outermost first
+    frame_path: list[str] = Field(default_factory=list, json_schema_extra=STRUCTURAL_EXTRA)
     ordinal: int | None = None  # tiebreaker only, never the primary signal
     relational: RelationalHint | None = None
-    dom_fallback: str | None = None  # CSS; explicitly brittle, attempted last, never fabricated
+    dom_fallback: str | None = Field(
+        default=None, json_schema_extra=STRUCTURAL_EXTRA
+    )  # CSS; explicitly brittle, attempted last, never fabricated
     confidence: float = 0.0
     notes: str = ""
+
+    @field_serializer("confidence")
+    def _round_confidence(self, value: float) -> float:
+        """D6 (Phase 8): rounded only at SERIALIZATION, not at construction, so the computed
+        value stays exact in memory (describe() below sums and clamps several small floats, and
+        rounding that arithmetic early would just move the same float noise -- e.g.
+        0.49999999999999994 -- one step earlier instead of removing it). Fixes the cosmetic but
+        real cost measured in the real artifact: confidences serializing as
+        0.49999999999999994 / 0.9500000000000001."""
+        return round(value, 4)
 
 
 class ResolutionStrategy(StrEnum):

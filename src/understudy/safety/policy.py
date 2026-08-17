@@ -377,16 +377,26 @@ class PolicyGate:
                 slug = slugify_param_name(element.name or "secret")
                 action_dict["text"] = f"${{param:{slug}}}"
             elif element.sensitivity == "pii":
+                # A parameter reference, not a bare "[REDACTED]" mask: record/recorder.py needs
+                # something to bind a declared, replayable InputParam(sensitivity="pii") to,
+                # exactly as it already does for a secret. A bare mask has no name in it for the
+                # recorder to recover, so a pii-marked field used to become a hardcoded step value
+                # replay could never reproduce -- the same defect class ParamRef already fixed for
+                # secrets. The `${pii:...}` prefix (not `${param:...}`) is what lets the recorder
+                # tell the two sensitivities apart from the placeholder text alone.
                 self._logger.redactor.register_secret(action.text)
-                action_dict["text"] = "[REDACTED]"
+                slug = slugify_param_name(element.name or "pii")
+                action_dict["text"] = f"${{pii:{slug}}}"
         # `type="act"`: evidence/logger.py's RunEvent requires a real rationale on every event of
-        # this type (R5). `rationale` and `step_id` are promoted to their own named fields;
-        # `context` (tool name, resolved target descriptor, output name) rides along as-is for
-        # record/recorder.py, which still needs all three to rebuild a Step.
+        # this type (R5). `rationale`, `step_id`, and (D2, Phase 8) `observation_digest` are
+        # promoted to their own named fields; `context` (tool name, resolved target descriptor,
+        # output name) rides along as-is for record/recorder.py, which still needs all three to
+        # rebuild a Step.
         self._logger.event(
             "act",
             phase="act",
             step_id=context.get("step_id"),
+            observation_digest=context.get("observation_digest"),
             proposed_action=action_dict,
             rationale=context.get("rationale"),
             policy_decision=decision.model_dump(),

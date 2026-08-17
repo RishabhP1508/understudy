@@ -260,6 +260,7 @@ def run(
             "decide",
             phase="decide",
             step_id=rounds,
+            observation_digest=current_digest,
             tokens=response.usage,
             duration_ms=duration_ms,
         )
@@ -361,7 +362,15 @@ def run(
                 return _end(RunStatus.DEAD_END, dead_end_streak=dead_end_streak)
             continue
 
-        context: dict[str, Any] = {"tool": name, "rationale": rationale}
+        # D2 (Phase 8): the digest of the observation this decision was made from, so a reviewer
+        # can see WHY no_progress/loop_detected fired and reconstruct the page progression from
+        # the evidence log alone -- previously computed in memory (current_digest, above) and
+        # compared locally, but never itself written down.
+        context: dict[str, Any] = {
+            "tool": name,
+            "rationale": rationale,
+            "observation_digest": current_digest,
+        }
         element: UIElement | None = None
         if name in ("click", "type", "select", "read", "extract"):
             element = observation.elements[args["index"]]
