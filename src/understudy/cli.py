@@ -4,16 +4,19 @@ from __future__ import annotations
 
 import json
 import re
-import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
 import typer
+import uvicorn
 from google.genai import errors
 
 from understudy.agent.loop import RunOutcome, run
 from understudy.config import load_settings
+from understudy.escalation.control import SessionBroker
+from understudy.escalation.operator_app import create_app
+from understudy.escalation.store import InterventionStore
 from understudy.evidence.logger import EvidenceLogger
 from understudy.llm.base import LLMClient, build_llm
 from understudy.models.artifact import Capability, StabilitySignal
@@ -28,7 +31,7 @@ from understudy.safety.policy import (
     PolicyGate,
     load_policy,
 )
-from understudy.safety.redact import Redactor
+from understudy.safety.redact import Redactor, mint_safe_id
 from understudy.surface.base import Surface
 from understudy.surface.web import WebSurface
 
@@ -91,6 +94,8 @@ def _discover_and_capture(
     timeout_s: float,
     stall_limit: int,
     full_render_every: int,
+    broker: SessionBroker | None = None,
+    intervention_ttl_s: float = 900,
 ) -> RunOutcome:
     """D7: however `run()` dies -- a Gemini API error, a policy stop, or anything else entirely
     unexpected -- a terminal `run_end` event and a `result.json` exist before the exception
@@ -113,6 +118,8 @@ def _discover_and_capture(
             timeout_s=timeout_s,
             stall_limit=stall_limit,
             full_render_every=full_render_every,
+            broker=broker,
+            intervention_ttl_s=intervention_ttl_s,
         )
     except Exception as exc:
         if isinstance(exc, _DISCOVERY_POLICY_STOPS):
@@ -140,6 +147,37 @@ def discover(
     evidence_dir: Annotated[
         Path, typer.Option("--evidence-dir", help="base directory for run evidence")
     ] = Path("evidence"),
+    escalate: Annotated[
+        bool,
+        typer.Option(
+            "--escalate/--no-escalate",
+            help=(
+                "raise a human intervention on a stopping condition instead of just ending the "
+                "run"
+            ),
+        ),
+    ] = True,
+    intervention_ttl: Annotated[
+        float,
+        typer.Option(
+            "--intervention-ttl",
+            help="seconds an intervention waits for an operator before expiring",
+        ),
+    ] = 900,
+    intervention_dir: Annotated[
+        Path,
+        typer.Option(
+            "--intervention-dir",
+            help="base directory for intervention records (point the operator console at this)",
+        ),
+    ] = Path("evidence/interventions"),
+    operator_port: Annotated[
+        int,
+        typer.Option(
+            "--operator-port",
+            help="port the operator console listens on, for the printed intervention URL",
+        ),
+    ] = 8765,
 ) -> None:
     policy_obj = load_policy(policy)
     resolved_target = target or policy_obj.entry_point
@@ -160,10 +198,22 @@ def discover(
     # never has to carry attributes it does not use.
     model_name = getattr(llm, "model", "unknown-model")
 
-    run_id = uuid.uuid4().hex[:12]
+    run_id = mint_safe_id()
     logger = EvidenceLogger(run_id, "discovery", base_dir=evidence_dir)
-    gate = PolicyGate(policy_obj, logger, mode="discovery")
     surface = WebSurface(policy=policy_obj, headless=False)
+    # Escalation is enabled by the presence of a broker, nothing else. `--no-escalate` (or any
+    # caller that never asks for one) leaves broker=None, and the run behaves exactly as it did
+    # before this option existed.
+    broker: SessionBroker | None = None
+    if escalate:
+        store = InterventionStore(base_dir=intervention_dir)
+        broker = SessionBroker(surface, store, run_id=run_id, logger=logger)
+        typer.echo(
+            f"escalation enabled: if this run raises an intervention, resolve it at "
+            f"http://127.0.0.1:{operator_port}/ (start it with `understudy operator "
+            f"--port {operator_port} --store-dir {intervention_dir} --evidence-dir {evidence_dir}`)"
+        )
+    gate = PolicyGate(policy_obj, logger, mode="discovery", broker=broker)
 
     max_steps = policy_obj.max_steps
     timeout_s = policy_obj.max_wall_clock_seconds
@@ -183,6 +233,8 @@ def discover(
             timeout_s=timeout_s,
             stall_limit=policy_obj.stall_limit,
             full_render_every=policy_obj.full_render_every,
+            broker=broker,
+            intervention_ttl_s=intervention_ttl,
         )
     except errors.APIError as exc:
         typer.echo(
@@ -213,6 +265,14 @@ def discover(
     typer.echo(f"outputs: {json.dumps(outcome.outputs)}")
     typer.echo(f"usage (this run): {json.dumps(outcome.usage)}")
     typer.echo(f"usage (client total): {json.dumps(getattr(llm, 'total_usage', {}))}")
+    if outcome.intervention_id is not None:
+        # run() blocks synchronously while an intervention is pending (SessionBroker.escalate's
+        # own poll loop), so by the time control returns here it is already resolved or expired --
+        # this reports what happened rather than announcing it live. A caller that wants to see
+        # it as it happens today has to watch the operator console itself while the run is up;
+        # a genuinely live CLI notification would need a callback into a blocking call this
+        # phase's own escalate() signature deliberately keeps to (request, logger) -> resolution.
+        typer.echo(f"intervention: {outcome.intervention_id} (resolution: {outcome.resolution})")
 
     if outcome.status != "goal_verified":
         typer.echo("goal was not verified; no artifact recorded.")
@@ -268,6 +328,37 @@ def replay(
             ),
         ),
     ] = 1,
+    escalate: Annotated[
+        bool,
+        typer.Option(
+            "--escalate/--no-escalate",
+            help=(
+                "raise a human intervention on a recoverable-condition or policy stop instead of "
+                "just failing"
+            ),
+        ),
+    ] = True,
+    intervention_ttl: Annotated[
+        float,
+        typer.Option(
+            "--intervention-ttl",
+            help="seconds an intervention waits for an operator before expiring",
+        ),
+    ] = 900,
+    intervention_dir: Annotated[
+        Path,
+        typer.Option(
+            "--intervention-dir",
+            help="base directory for intervention records (point the operator console at this)",
+        ),
+    ] = Path("evidence/interventions"),
+    operator_port: Annotated[
+        int,
+        typer.Option(
+            "--operator-port",
+            help="port the operator console listens on, for the printed intervention URL",
+        ),
+    ] = 8765,
 ) -> None:
     """Exit codes: 0 for success AND for a business outcome (a legitimate answer, never a
     failure); 1 for a hard failure; 2 for a caller error -- an INVALID_PARAMS hard failure, or an
@@ -278,6 +369,14 @@ def replay(
     result: ReplayResult | None = None
     outcomes_seen: list[str] = []
     successes = 0
+    intervention_store: InterventionStore | None = None
+    if escalate:
+        intervention_store = InterventionStore(base_dir=intervention_dir)
+        typer.echo(
+            f"escalation enabled: if this run raises an intervention, resolve it at "
+            f"http://127.0.0.1:{operator_port}/ (start it with `understudy operator "
+            f"--port {operator_port} --store-dir {intervention_dir} --evidence-dir {evidence_dir}`)"
+        )
     try:
         for _run_index in range(repeat):
             result = replay_engine.replay(
@@ -286,6 +385,8 @@ def replay(
                 policy,
                 allow_risky=allow_risky,
                 evidence_base_dir=evidence_dir,
+                intervention_store=intervention_store,
+                intervention_ttl_s=intervention_ttl,
             )
             outcomes_seen.append(result.kind)
             if result.kind in ("success", "business_outcome"):
@@ -317,6 +418,12 @@ def replay(
         typer.echo(f"  code: {result.code}")
         typer.echo(f"  message: {result.message}")
         typer.echo(f"  observed: {result.observed}")
+
+    if result.kind == "escalated":
+        typer.echo("ESCALATED (a human was involved):")
+        typer.echo(f"  intervention: {result.intervention_id}")
+        typer.echo(f"  resolution: {result.resolution}")
+        typer.echo(f"  resumed: {result.resumed}")
 
     typer.echo(Redactor().dumps(result, indent=2))
 
@@ -398,9 +505,18 @@ def record(
 
 
 @app.command()
-def operator() -> None:
-    typer.echo("not implemented")
-    raise typer.Exit(2)
+def operator(
+    port: Annotated[
+        int, typer.Option("--port", help="port to serve the operator console on")
+    ] = 8765,
+    store_dir: Annotated[
+        Path, typer.Option("--store-dir", help="base directory for intervention records")
+    ] = Path("evidence/interventions"),
+    evidence_dir: Annotated[
+        Path, typer.Option("--evidence-dir", help="base directory for run evidence")
+    ] = Path("evidence"),
+) -> None:
+    uvicorn.run(create_app(store_dir, evidence_dir), host="127.0.0.1", port=port)
 
 
 @app.command()

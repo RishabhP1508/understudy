@@ -5,8 +5,9 @@ codebase -- tests/test_constraints.py (invariant 2) enforces that by walking the
 file under src/ -- and every call, allowed or refused, is logged with its decision before it runs
 (or before it is refused).
 
-Checks run in a fixed order and the first to refuse wins: pending navigation violations, then the
-origin+route allowlist, then the action type, then the target's role, then forbidden text
+Checks run in a fixed order and the first to refuse wins: the control token (Phase 10,
+escalation/control.py -- only AUTOMATION may dispatch), then pending navigation violations, then
+the origin+route allowlist, then the action type, then the target's role, then forbidden text
 patterns, then risk. `classify()` (safety/risk.py) is computed up front so its reason travels with
 every logged decision, allow or deny, not only the ones it itself refuses.
 
@@ -29,7 +30,9 @@ from urllib.parse import urlsplit
 import yaml
 from pydantic import BaseModel, Field
 
+from understudy.escalation.control import ControlHeld, SessionBroker
 from understudy.evidence.logger import EvidenceLogger
+from understudy.models.intervention import ReasonCode
 from understudy.models.observation import UIElement
 from understudy.safety.redact import slugify_param_name
 from understudy.safety.risk import RiskClass, classify
@@ -105,6 +108,53 @@ class PolicyDecision(BaseModel):
     checked_urls: list[str] = Field(default_factory=list)
 
 
+def decision_context(decision: PolicyDecision) -> dict[str, str]:
+    """Flat, already-plain-string detail for an escalation raised over a refusing
+    `PolicyDecision` (F2, Phase 10 round F): the operator is being asked to authorize or reject
+    one SPECIFIC refusal, and the gate's own words -- which rule, why, the risk class and its own
+    reason, and the action kind -- are the best statement of what that refusal was. Shared by
+    agent/loop.py and replay/engine.py so the two execution paths build this from the same five
+    fields rather than each inventing its own subset.
+    """
+    return {
+        "rule": decision.rule,
+        "reason": decision.reason,
+        "risk": decision.risk,
+        "risk_reason": decision.risk_reason,
+        "action_kind": decision.action_kind,
+    }
+
+
+# The two rules a refusing PolicyDecision can carry when the refusal is a RISKY_IRREVERSIBLE
+# action pending human authorization: "risk_discovery" (dispatch above, mode="discovery") and
+# "risk_replay" (dispatch above, mode="replay", capability not approved+allow_risky). Every other
+# refusing rule (allowlist/action_type/role/forbidden_text/control_token) means the action is not
+# permitted at all, in either mode.
+_RISK_RULES = frozenset({"risk_discovery", "risk_replay"})
+
+
+def reason_code_for_decision(decision: PolicyDecision) -> ReasonCode:
+    """G1 (Phase 10 round G): the escalation reason code for a refusing `PolicyDecision`, derived
+    from the decision's own `rule` -- NEVER from which exception type (`PolicyDenied` versus
+    `EscalationRequired`) carried it here. Those two types are a discovery/replay CONTROL-FLOW
+    detail (decision 41: discovery and replay want to handle a refusal differently, which is why
+    there are two types at all), not a statement of WHY the action was refused -- replay's own
+    risk-refusal rule (`risk_replay`) raises `PolicyDenied`, the exact same exception type replay
+    raises for an allowlist/role/etc. refusal, so branching on exception type there produced the
+    same reason code for two different conditions. Both execution paths call this one function so
+    they cannot independently drift on what the same rule means.
+
+    `risk_discovery`/`risk_replay` mean a human could authorize this ONE action --
+    `RISKY_ACTION_REQUIRES_APPROVAL`, which is also the only reason code the operator console
+    (escalation/operator_app.py) offers a per-action approve/reject decision for. Every other rule
+    means the action is not permitted at all, and no per-action approval should ever be offered
+    for it -- `POLICY_REFUSED`.
+    """
+    if decision.rule in _RISK_RULES:
+        return ReasonCode.RISKY_ACTION_REQUIRES_APPROVAL
+    return ReasonCode.POLICY_REFUSED
+
+
 class PolicyDenied(Exception):
     """Refused by the allowlist, action-type, role, forbidden-text, or (in replay, without an
     approved+allow_risky capability) risk check."""
@@ -141,12 +191,14 @@ class PolicyGate:
         mode: Literal["discovery", "replay"] = "discovery",
         allow_risky: bool = False,
         capability_status: str | None = None,
+        broker: SessionBroker | None = None,
     ) -> None:
         self._policy = policy
         self._logger = logger
         self._mode = mode
         self._allow_risky = allow_risky
         self._capability_status = capability_status
+        self._broker = broker
 
     def dispatch(
         self,
@@ -157,6 +209,38 @@ class PolicyGate:
     ) -> str | None:
         context = context or {}
         policy = self._policy
+
+        # 0. control token (escalation/control.py's SessionBroker): only AUTOMATION may
+        # dispatch. Checked before every other rule, including the pending-navigation check
+        # right below, because a human holding the token (or a handoff in either transient
+        # direction, PENDING_HANDOFF/PENDING_RESUME) is not a property of THIS action at all --
+        # it is true regardless of what was proposed, so it must refuse before anything about
+        # the action is even inspected.
+        if self._broker is not None:
+            try:
+                self._broker.require_automation()
+            except ControlHeld as exc:
+                current_url = action.url if isinstance(action, Navigate) else surface.url
+                role = element.role if element is not None else None
+                decision = PolicyDecision(
+                    allowed=False,
+                    rule="control_token",
+                    reason=(
+                        f"control is held by {exc.holder!r} in state {exc.state.value!r}, not "
+                        "AUTOMATION: the run is paused for a human handoff"
+                    ),
+                    risk="n/a",
+                    risk_reason=(
+                        "not classified: the control token refused the action before risk "
+                        "classification ran"
+                    ),
+                    action_kind=action.kind,
+                    url=current_url,
+                    role=role,
+                    checked_urls=[],
+                )
+                self._log(action, context, decision, element)
+                raise PolicyDenied(decision) from exc
 
         # 1. Pending navigation violations only (surface.navigation_violations), not a
         # synchronous surface.url check -- a freshly launched WebSurface's page starts at
@@ -269,8 +353,23 @@ class PolicyGate:
                     self._log(action, context, decision, element)
                     raise PolicyDenied(decision)
 
-        # 6. risk
-        if risk == RiskClass.RISKY_IRREVERSIBLE:
+        # 6. risk. A one-shot intervention approval (SessionBroker.grant_approval /
+        # consume_approval) is checked FIRST, before either mode-specific refusal below: a human
+        # resolving an escalation with "approved" authorizes exactly the ONE risky dispatch that
+        # raised it, in EITHER discovery or replay -- the same mechanism, not two. The approval
+        # is looked up by the CURRENT control token's own intervention_id (set when the
+        # transition that resolved it ran, escalation/control.py), never by a caller-supplied
+        # flag: the whole value of this choke point is that a caller cannot argue its way past
+        # it, only external state a human actually created can.
+        approved_by_intervention: str | None = None
+        if risk == RiskClass.RISKY_IRREVERSIBLE and self._broker is not None:
+            pending_intervention_id = self._broker.state().intervention_id
+            if pending_intervention_id is not None and self._broker.consume_approval(
+                pending_intervention_id
+            ):
+                approved_by_intervention = pending_intervention_id
+
+        if risk == RiskClass.RISKY_IRREVERSIBLE and approved_by_intervention is None:
             if self._mode == "discovery":
                 decision = PolicyDecision(
                     allowed=False,
@@ -307,20 +406,36 @@ class PolicyGate:
                 raise PolicyDenied(decision)
 
         # 7. allowed
-        decision = PolicyDecision(
-            allowed=True,
-            rule="allowed",
-            reason=(
-                "passed the allowlist, action-type, role, forbidden-text, and risk checks "
-                f"({role_note})"
-            ),
-            risk=risk.value,
-            risk_reason=risk_reason,
-            action_kind=action.kind,
-            url=current_url,
-            role=role,
-            checked_urls=checked_urls,
-        )
+        if approved_by_intervention is not None:
+            decision = PolicyDecision(
+                allowed=True,
+                rule="risk_approved_by_intervention",
+                reason=(
+                    "RISKY_IRREVERSIBLE action allowed: one-shot approval granted by "
+                    f"intervention {approved_by_intervention!r} ({role_note})"
+                ),
+                risk=risk.value,
+                risk_reason=risk_reason,
+                action_kind=action.kind,
+                url=current_url,
+                role=role,
+                checked_urls=checked_urls,
+            )
+        else:
+            decision = PolicyDecision(
+                allowed=True,
+                rule="allowed",
+                reason=(
+                    "passed the allowlist, action-type, role, forbidden-text, and risk checks "
+                    f"({role_note})"
+                ),
+                risk=risk.value,
+                risk_reason=risk_reason,
+                action_kind=action.kind,
+                url=current_url,
+                role=role,
+                checked_urls=checked_urls,
+            )
 
         # Logged AFTER executing (not before, as the refusal branches above have to be), so the
         # one "act" event for a dispatched action also carries its own result -- R5's "what the
