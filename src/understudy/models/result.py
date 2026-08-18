@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 
 
 class FailureCategory(StrEnum):
-    """Twelve values. Three of the first ten exist because a single message,
+    """Thirteen values. Three of the first ten exist because a single message,
     "could not resolve the target for step 0", was measured (Phase 3) coming from two
     unrelated causes -- a dead fixture server and a stale artifact -- and a caller cannot act on
     a failure it cannot tell apart. See docs/adr/0009 for the full reasoning and the classifier.
@@ -64,6 +64,10 @@ class FailureCategory(StrEnum):
       runs (Phase 8's D-defect-1 fix): there is no point launching a browser for a request that
       cannot possibly succeed, and typing a missing parameter's placeholder text literally into a
       live form is worse than refusing up front.
+    - ESCALATION_UNRESOLVED: an intervention (models/intervention.py) passed its own
+      `expires_at` with no operator decision recorded, so the run terminated deliberately rather
+      than hanging forever waiting for a human who never came (Phase 10's
+      `SessionBroker.await_resolution` returning None).
 
     PERMISSION_DENIED, SESSION_EXPIRED, and UNHANDLED_DIALOG have no detector wired to them yet --
     that is Phase 9's recovery/outcome taxonomy. The category exists now because the result
@@ -84,6 +88,7 @@ class FailureCategory(StrEnum):
     SESSION_EXPIRED = "session_expired"
     UNHANDLED_DIALOG = "unhandled_dialog"
     INVALID_PARAMS = "invalid_params"
+    ESCALATION_UNRESOLVED = "escalation_unresolved"
 
 
 class Success(BaseModel):

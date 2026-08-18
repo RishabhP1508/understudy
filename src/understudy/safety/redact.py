@@ -64,6 +64,7 @@ from __future__ import annotations
 import io
 import json
 import re
+import uuid
 from typing import Any, Literal
 
 from PIL import Image, ImageDraw
@@ -111,6 +112,30 @@ _PII_PATTERNS: dict[str, re.Pattern[str]] = {
     # instance), which account_number/card_number already cover if it is genuinely one long run.
     "phone": re.compile(r"\b(?:\+?1[-. ])?\(?\d{3}\)?[-. ]\d{3}[-. ]\d{4}\b"),
 }
+
+
+def mint_safe_id(prefix: str = "id", length: int = 12) -> str:
+    """Mint a short opaque id (a run id, an intervention id, ...) that is GUARANTEED to survive
+    `Redactor().dumps()` unchanged, for every id this codebase writes to disk and later looks up
+    by value (`EvidenceLogger`'s `run_id`, `Capability.provenance.run_id`, an
+    `InterventionRequest.id` looked up again in the store).
+
+    The hazard this closes: a bare `uuid.uuid4().hex[:n]` slice is all-ASCII-digits with
+    probability 0.625**n (10 of 16 hex digits are decimal digits), which is NOT negligible at the
+    lengths this codebase actually uses -- about 1 in 110 at n=10, about 1 in 281 at n=12. R2's
+    `account_number` pattern (`\\b\\d{9,}\\b`) applies to EVERY field unconditionally, regardless
+    of STRUCTURAL marking (ARCHITECTURE.md decision 65, docs/adr/0008/0012) -- there is no
+    per-field exemption to add here, on purpose. So an all-digit id is silently rewritten to
+    "[REDACTED]" the first time it is serialized, which severs it from every later lookup by that
+    same value: a run's own `run_id` no longer names the evidence directory it came from, an
+    intervention id no longer resolves in the store.
+
+    A fixed, non-digit, no-separator PREFIX is the fix: it keeps the id one contiguous `\\w` token
+    with no internal word boundary for `\\b\\d{9,}\\b` to anchor on, so no substring of the result
+    can ever match, regardless of what the random hex tail turns out to be -- proven, not just
+    argued, by test_phase5.py's iterated redaction test.
+    """
+    return f"{prefix}{uuid.uuid4().hex[:length]}"
 
 
 def slugify_param_name(name: str) -> str:

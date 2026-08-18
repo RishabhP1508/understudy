@@ -1,0 +1,430 @@
+{
+  "schema_version": 2,
+  "version": 1,
+  "capability_id": "open-a-new-savings-subaccount-for-member-12345-with-the-nickname-vacation-fund-and-an-initial-deposit-of-250",
+  "name": "open_savings_subaccount",
+  "description": "Automates the process of logging into the banking portal, selecting a specific member, and opening a new savings subaccount with a custom nickname and initial deposit.",
+  "target": {
+    "app_id": "legacy_bank",
+    "entry_point": "http://127.0.0.1:5055/login",
+    "tenant_id": null,
+    "app_fingerprint": null
+  },
+  "inputs": [
+    {
+      "name": "password",
+      "type": "string",
+      "required": true,
+      "description": "the value typed into 'Password'",
+      "example": null,
+      "sensitivity": "secret"
+    },
+    {
+      "name": "member_id",
+      "type": "integer",
+      "required": true,
+      "description": "the value typed into 'Member ID'",
+      "example": 12345,
+      "sensitivity": "none"
+    },
+    {
+      "name": "initial_deposit",
+      "type": "integer",
+      "required": true,
+      "description": "the value typed into 'Initial Deposit'",
+      "example": 250,
+      "sensitivity": "none"
+    }
+  ],
+  "outputs": [],
+  "steps": [
+    {
+      "id": "0",
+      "index": 0,
+      "action": "type",
+      "target": {
+        "role": "textbox",
+        "name": "Username",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [],
+        "ordinal": 0,
+        "relational": {
+          "kind": "row_label",
+          "label": "Username"
+        },
+        "dom_fallback": null,
+        "confidence": 0.5,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
+        "recorded_rank": 1
+      },
+      "value": "admin",
+      "precondition": null,
+      "postcondition": {
+        "kind": "element_present",
+        "target": "textbox",
+        "value": "Password"
+      },
+      "risk_class": "SAFE_REVERSIBLE",
+      "rationale": "Logging in to access the banking system.",
+      "on_failure": null
+    },
+    {
+      "id": "1",
+      "index": 1,
+      "action": "type",
+      "target": {
+        "role": "textbox",
+        "name": "Password",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [],
+        "ordinal": 1,
+        "relational": {
+          "kind": "row_label",
+          "label": "Password"
+        },
+        "dom_fallback": null,
+        "confidence": 0.5,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
+        "recorded_rank": 1
+      },
+      "value": {
+        "kind": "param_ref",
+        "name": "password"
+      },
+      "precondition": null,
+      "postcondition": {
+        "kind": "element_present",
+        "target": "button",
+        "value": "Login"
+      },
+      "risk_class": "SAFE_REVERSIBLE",
+      "rationale": "Logging in to access the banking system.",
+      "on_failure": null
+    },
+    {
+      "id": "2",
+      "index": 2,
+      "action": "click",
+      "target": {
+        "role": "button",
+        "name": "Login",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [],
+        "ordinal": null,
+        "relational": null,
+        "dom_fallback": null,
+        "confidence": 0.9,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
+        "recorded_rank": 1
+      },
+      "value": null,
+      "precondition": null,
+      "postcondition": {
+        "kind": "url_matches",
+        "target": "any_frame",
+        "value": "http://127.0.0.1:5055/members"
+      },
+      "risk_class": "SAFE_REVERSIBLE",
+      "rationale": "Submitting the login credentials.",
+      "on_failure": null
+    },
+    {
+      "id": "3",
+      "index": 3,
+      "action": "type",
+      "target": {
+        "role": "textbox",
+        "name": "Member ID",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": null,
+        "relational": {
+          "kind": "row_label",
+          "label": "Member ID"
+        },
+        "dom_fallback": null,
+        "confidence": 0.65,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
+        "recorded_rank": 1
+      },
+      "value": {
+        "kind": "param_ref",
+        "name": "member_id"
+      },
+      "precondition": null,
+      "postcondition": {
+        "kind": "element_present",
+        "target": "button",
+        "value": "Search"
+      },
+      "risk_class": "SAFE_REVERSIBLE",
+      "rationale": "Searching for member 12345.",
+      "on_failure": null
+    },
+    {
+      "id": "4",
+      "index": 4,
+      "action": "click",
+      "target": {
+        "role": "button",
+        "name": "Search",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": null,
+        "relational": {
+          "kind": "row_label",
+          "label": "Member ID"
+        },
+        "dom_fallback": null,
+        "confidence": 0.95,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
+        "recorded_rank": 1
+      },
+      "value": null,
+      "precondition": null,
+      "postcondition": {
+        "kind": "url_matches",
+        "target": "any_frame",
+        "value": "http://127.0.0.1:5055/members?f7=:member_id"
+      },
+      "risk_class": "SAFE_REVERSIBLE",
+      "rationale": "Clicking Search to find member 12345.",
+      "on_failure": null
+    },
+    {
+      "id": "5",
+      "index": 5,
+      "action": "click",
+      "target": {
+        "role": "link",
+        "name": ":member_id.*",
+        "name_match": "regex",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": null,
+        "relational": null,
+        "dom_fallback": null,
+        "confidence": 0.9,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM name generalized to a regex: the text around :member_id was this recording's own observed data (e.g. this record's own name), the recorder has no evidence it is stable across a different parameter value, and resolution requires a unique match, so an over-broad pattern fails loudly rather than silently resolving to the wrong element.",
+        "recorded_rank": 1
+      },
+      "value": null,
+      "precondition": null,
+      "postcondition": {
+        "kind": "url_matches",
+        "target": "any_frame",
+        "value": "http://127.0.0.1:5055/member/:member_id/balance"
+      },
+      "risk_class": "SAFE_REVERSIBLE",
+      "rationale": "Selecting member 12345 to view their account details.",
+      "on_failure": null
+    },
+    {
+      "id": "6",
+      "index": 6,
+      "action": "click",
+      "target": {
+        "role": "link",
+        "name": "Open Subaccount",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": null,
+        "relational": null,
+        "dom_fallback": null,
+        "confidence": 0.9,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
+        "recorded_rank": 1
+      },
+      "value": null,
+      "precondition": null,
+      "postcondition": {
+        "kind": "url_matches",
+        "target": "any_frame",
+        "value": "http://127.0.0.1:5055/member/:member_id/subaccount/new"
+      },
+      "risk_class": "SAFE_REVERSIBLE",
+      "rationale": "Opening the form to create a new subaccount.",
+      "on_failure": null
+    },
+    {
+      "id": "7",
+      "index": 7,
+      "action": "type",
+      "target": {
+        "role": "textbox",
+        "name": "Nickname",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": 0,
+        "relational": {
+          "kind": "row_label",
+          "label": "Nickname"
+        },
+        "dom_fallback": null,
+        "confidence": 0.5,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
+        "recorded_rank": 1
+      },
+      "value": "Vacation Fund",
+      "precondition": null,
+      "postcondition": {
+        "kind": "element_present",
+        "target": "textbox",
+        "value": "Initial Deposit"
+      },
+      "risk_class": "SAFE_REVERSIBLE",
+      "rationale": "Entering the nickname for the new savings subaccount.",
+      "on_failure": null
+    },
+    {
+      "id": "8",
+      "index": 8,
+      "action": "type",
+      "target": {
+        "role": "textbox",
+        "name": "Initial Deposit",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": 1,
+        "relational": {
+          "kind": "row_label",
+          "label": "Initial Deposit"
+        },
+        "dom_fallback": null,
+        "confidence": 0.5,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
+        "recorded_rank": 1
+      },
+      "value": {
+        "kind": "param_ref",
+        "name": "initial_deposit"
+      },
+      "precondition": null,
+      "postcondition": {
+        "kind": "element_present",
+        "target": "button",
+        "value": "Submit"
+      },
+      "risk_class": "SAFE_REVERSIBLE",
+      "rationale": "Entering the initial deposit amount for the new subaccount.",
+      "on_failure": null
+    },
+    {
+      "id": "9",
+      "index": 9,
+      "action": "click",
+      "target": {
+        "role": "button",
+        "name": "Submit",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": null,
+        "relational": null,
+        "dom_fallback": null,
+        "confidence": 0.9,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
+        "recorded_rank": 1
+      },
+      "value": null,
+      "precondition": null,
+      "postcondition": {
+        "kind": "text_present",
+        "target": "page",
+        "value": "Subaccount Opened"
+      },
+      "risk_class": "RISKY_IRREVERSIBLE",
+      "rationale": "Submitting the form to create the new subaccount.",
+      "on_failure": null
+    }
+  ],
+  "success": {
+    "kind": "text_present",
+    "target": "page",
+    "value": "Subaccount Opened"
+  },
+  "known_outcomes": [
+    {
+      "code": "member_not_found",
+      "detector": "member_lookup_no_match",
+      "terminal": true,
+      "message_template": "No member found for the given id."
+    },
+    {
+      "code": "permission_denied",
+      "detector": "permission_denied",
+      "terminal": true,
+      "message_template": "You do not have permission to view this record."
+    },
+    {
+      "code": "validation_rejected",
+      "detector": "validation_rejected",
+      "terminal": true,
+      "message_template": "The submitted value could not be validated."
+    }
+  ],
+  "recovery_rules": [
+    {
+      "id": "dismiss_native_dialog",
+      "trigger": "native_dialog_appeared",
+      "action": "dismiss_dialog",
+      "max_attempts": 3
+    },
+    {
+      "id": "dismiss_html_interstitial",
+      "trigger": "html_interstitial_present",
+      "action": "dismiss",
+      "max_attempts": 4
+    },
+    {
+      "id": "retry_transient_failure",
+      "trigger": "transient_error_page",
+      "action": "retry",
+      "max_attempts": 5
+    },
+    {
+      "id": "wait_for_slow_load",
+      "trigger": "navigation_still_in_flight",
+      "action": "wait",
+      "max_attempts": 3
+    },
+    {
+      "id": "reauth_on_session_expiry",
+      "trigger": "session_lost_mid_flow",
+      "action": "reauth",
+      "max_attempts": 1
+    }
+  ],
+  "provenance": {
+    "run_id": "idc6c0778a1d81",
+    "model": "gemini-3.1-flash-lite",
+    "timestamp": "2026-08-18T07:35:17.341560+00:00",
+    "code_sha": null,
+    "perception_version": 2,
+    "transcript_hash": "d975e80861e887ec056cd8f947d25904be07a5b0a7f7d83406a268fc9f08d5c2"
+  },
+  "status": "draft",
+  "stability": null
+}

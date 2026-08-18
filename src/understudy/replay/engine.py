@@ -16,11 +16,13 @@ from __future__ import annotations
 
 import re
 import time
-import uuid
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+from understudy.escalation.control import ControlState, SessionBroker
+from understudy.escalation.store import InterventionStore
 from understudy.evidence.logger import EvidenceLogger
 from understudy.models.artifact import (
     Capability,
@@ -30,9 +32,11 @@ from understudy.models.artifact import (
     checkpoint_satisfied,
     login_prefix_len,
 )
+from understudy.models.intervention import InterventionRequest, InterventionResolution, ReasonCode
 from understudy.models.observation import PERCEPTION_VERSION, Observation, UIElement
 from understudy.models.result import (
     BusinessOutcome,
+    Escalated,
     FailureCategory,
     HardFailure,
     ReplayResult,
@@ -45,8 +49,11 @@ from understudy.safety.policy import (
     NavigationBlocked,
     PolicyDenied,
     PolicyGate,
+    decision_context,
     load_policy,
+    reason_code_for_decision,
 )
+from understudy.safety.redact import mint_safe_id
 from understudy.surface.base import Action, Click, Navigate, ReadText, Select, Type
 from understudy.surface.locator import (
     Resolution,
@@ -417,6 +424,57 @@ def _finish_result(
     return Success(outputs=outputs, steps_run=steps_run, duration_ms=duration_ms)
 
 
+def _resolve_escalation(
+    broker: SessionBroker,
+    logger: EvidenceLogger,
+    surface: WebSurface,
+    capability: Capability,
+    reason_code: ReasonCode,
+    step_id: int | None,
+    what_it_tried: str,
+    what_it_observed: str,
+    context: dict[str, str],
+    ttl_seconds: float,
+) -> tuple[str, InterventionResolution | None]:
+    """Build one InterventionRequest and hand it to `SessionBroker.escalate()`
+    (escalation/control.py), the ONE shared entry point both execution paths raise an
+    intervention through. Returns `(request.id, resolution)`; `resolution` is None on expiry.
+
+    F1: the screenshot is taken from THIS SAME `observation` (never a second, fresher one), so
+    the request's own observation and its screenshot describe the same moment -- see
+    agent/loop.py's own `_resolve_escalation` docstring for the full argument. F2: `context` is
+    the caller's own flat, already-plain-string detail for the reason code being raised --
+    required, not defaulted, so a call site cannot silently fall back to an empty dict.
+    """
+    observation = surface.observe()
+    screenshot_path = logger.escalation_screenshot(surface, observation)
+    now = datetime.now(UTC)
+    request = InterventionRequest(
+        # mint_safe_id (safety/redact.py) -- a bare hex slice can randomly come out all-digit
+        # and get silently rewritten to "[REDACTED]" by R2 the first time it is serialized,
+        # breaking every later store lookup by this id. See its docstring for the measured
+        # probability and why a fixed prefix is the whole-class fix, not a per-field exemption.
+        id=mint_safe_id(prefix="esc", length=10),
+        run_id=logger.run_id,
+        capability_id=capability.capability_id,
+        goal=capability.description or capability.name,
+        step_id=step_id,
+        reason_code=reason_code,
+        what_it_tried=what_it_tried,
+        what_it_observed=what_it_observed,
+        observation=observation,
+        screenshot_path=(
+            screenshot_path.relative_to(logger.dir).as_posix()
+            if screenshot_path is not None
+            else None
+        ),
+        context=context,
+        created_at=now.isoformat(),
+        expires_at=(now + timedelta(seconds=ttl_seconds)).isoformat(),
+    )
+    return request.id, broker.escalate(request, logger)
+
+
 class _RunState:
     """Mutable, in-memory-only recovery bookkeeping shared across every step's own recovery loop
     -- never serialized, unlike everything else this module touches. Two independent things:
@@ -424,11 +482,20 @@ class _RunState:
     native dialog can fire mid-action, asynchronously, not aligned to any one step's own
     evaluation), and how many recovery attempts this WHOLE RUN has spent (the run-level cap,
     independent of any one rule's own per-step max_attempts).
+
+    Task C2 adds three more fields, all escalation bookkeeping for the WHOLE run rather than one
+    step: `resumed` (has ANY escalation this run raised been rescued via `approved`/`took_control`
+    at least once -- what `Escalated.resumed` reports), and the id/decision of the LAST
+    intervention raised, for the same reason discovery's `RunOutcome` carries them (a caller needs
+    to see a human was involved even in a run that goes on to finish normally afterward).
     """
 
     def __init__(self) -> None:
         self._dialog_cursor = 0
         self._total_recovery_attempts = 0
+        self.resumed = False
+        self.last_intervention_id: str | None = None
+        self.last_resolution: str | None = None
 
     def new_dialogs(self, surface: WebSurface) -> list[dict[str, Any]]:
         events = list(getattr(surface, "dialog_events", []))
@@ -457,13 +524,24 @@ class _DialogPolicy:
     `_run_step` calls it at the top of every step, so `max_attempts` means "per step" here too, the
     same as everywhere else. The run-level cap (`_MAX_RECOVERY_ATTEMPTS_PER_RUN`) is untouched by
     this and is still what stops a genuinely runaway page.
+
+    Task C3: during a handoff (the control token is anything other than AUTOMATION) this stands
+    down BEFORE the budget is even consulted, so standing down does not silently spend it either.
+    A `window.confirm` a human was escalated to DECIDE must reach that human, not be dismissed out
+    from under them by this rule. A human answering the confirm produces NO captured `HumanAction`
+    (surface/web.py's `install_human_action_capture` cannot see a native dialog at all -- it is not
+    a DOM event); the evidence for it is this same dialog event's own `handled` value being
+    `"none"` rather than `"dismiss"`.
     """
 
-    def __init__(self, max_attempts: int) -> None:
+    def __init__(self, max_attempts: int, broker: SessionBroker | None = None) -> None:
         self._max_attempts = max_attempts
         self._remaining = max_attempts
+        self._broker = broker
 
     def __call__(self, event: dict[str, Any]) -> str:
+        if self._broker is not None and self._broker.state().state != ControlState.AUTOMATION:
+            return "none"
         if self._remaining > 0:
             self._remaining -= 1
             return "dismiss"
@@ -473,9 +551,11 @@ class _DialogPolicy:
         self._remaining = self._max_attempts
 
 
-def _make_dialog_policy(capability: Capability) -> _DialogPolicy:
+def _make_dialog_policy(
+    capability: Capability, broker: SessionBroker | None = None
+) -> _DialogPolicy:
     rule = next((r for r in capability.recovery_rules if r.action == "dismiss_dialog"), None)
-    return _DialogPolicy(rule.max_attempts if rule is not None else 0)
+    return _DialogPolicy(rule.max_attempts if rule is not None else 0, broker=broker)
 
 
 def _make_reauth(
@@ -550,10 +630,12 @@ def _run_step(
     reauth: Callable[[], str],
     prefix_len: int,
     dialog_policy: _DialogPolicy,
-) -> HardFailure | BusinessOutcome | tuple[Observation, str | None]:
-    """Run one recorded step to a terminal answer: a HardFailure or BusinessOutcome that ends the
-    whole replay, or `(after_observation, extracted_value)` once this step is genuinely done
-    (extracted_value is None for every non-"extract" step).
+    broker: SessionBroker | None = None,
+    intervention_ttl_s: float = 900,
+) -> HardFailure | BusinessOutcome | Escalated | tuple[Observation, str | None]:
+    """Run one recorded step to a terminal answer: a HardFailure, BusinessOutcome, or Escalated
+    that ends the whole replay, or `(after_observation, extracted_value)` once this step is
+    genuinely done (extracted_value is None for every non-"extract" step).
 
     A recovery loop lives here: `should_dispatch` starts True (the recorded action has not run
     yet) and stays True only immediately after a `reauth` recovery (the session died, so the
@@ -561,6 +643,15 @@ def _run_step(
     (`retry`/`wait`/`dismiss`/`dismiss_dialog`) leaves it False, because the action already ran --
     only the PAGE needed recovering, so only (e)/(f) below repeat, never the locator resolve or
     the dispatch itself.
+
+    Task C2: escalation is enabled by the presence of `broker`, nothing else -- a call with
+    broker=None (every test predating this task) is byte-for-byte the failure this function
+    already produced. `_rescue` and `_resume` (below) are the escalate-then-decide machinery
+    shared by the three call sites with no specific refused action to re-dispatch on approval (a
+    locator failure, an unrecovered condition); `_handle_dispatch_policy_exception` is the same
+    idea for the two call sites that DO have one (this step's own dispatch raising
+    PolicyDenied/EscalationRequired), where "approved" means something concrete: re-dispatch the
+    SAME action.
     """
     # The native-dialog budget is per STEP (same as every other rule's max_attempts,
     # attempts_by_rule below): reset it here, once, before this step's own action or any of its
@@ -579,6 +670,198 @@ def _run_step(
     # the postcondition check) can still describe THIS step by its actual, interpolated name.
     # Stays None for a navigate step (step.target is None), which `_describe_step` degrades for.
     interpolated_target: TargetDescriptor | None = None
+
+    def _resume() -> HardFailure | BusinessOutcome | Escalated | tuple[Observation, str | None]:
+        """RESUME IS NOT BLIND (task C2). Called once a human has taken control of THIS step and
+        handed it back (or approved with nothing concrete to re-dispatch). Re-observe, then: if
+        the step's own postcondition NOW holds, the human already did this step's work -- skip
+        it. Otherwise, if the step's precondition holds (or it has none), it is still safe to
+        attempt from the top -- retry the whole step. Otherwise resuming would be a guess neither
+        checkpoint can justify: escalate ONE more time as unrecoverable_condition, and whatever
+        THAT resolves to is final -- not a third round of this same decision.
+        """
+        assert broker is not None  # only ever called after a broker has already resolved once
+        after_observation = surface.observe()
+        if step.postcondition is not None:
+            resolved_post = _resolve_checkpoint(step.postcondition, capability, params)
+            if checkpoint_satisfied(after_observation, resolved_post):
+                logger.event(
+                    "step_skipped_after_handoff",
+                    step_id=step.index,
+                    note="the step's own postcondition was already satisfied when control returned",
+                )
+                return after_observation, None
+
+        precondition_ok = step.precondition is None or checkpoint_satisfied(
+            after_observation, _resolve_checkpoint(step.precondition, capability, params)
+        )
+        if precondition_ok:
+            return _run_step(
+                step,
+                capability,
+                params,
+                surface,
+                gate,
+                logger,
+                run_state,
+                reauth,
+                prefix_len,
+                dialog_policy,
+                broker,
+                intervention_ttl_s,
+            )
+
+        request_id, resolution = _resolve_escalation(
+            broker,
+            logger,
+            surface,
+            capability,
+            ReasonCode.UNRECOVERABLE_CONDITION,
+            step.index,
+            what_it_tried=f"resumed after a handoff at {_describe_step(step, None)}",
+            what_it_observed=(
+                "neither the step's postcondition nor its precondition holds after the handoff; "
+                "automation cannot safely guess whether to skip or retry this step"
+            ),
+            context={
+                "capability_id": capability.capability_id,
+                "step_index": str(step.index),
+            },
+            ttl_seconds=intervention_ttl_s,
+        )
+        run_state.last_intervention_id = request_id
+        if resolution is None:
+            run_state.last_resolution = "expired"
+            return HardFailure(
+                step_id=step.index,
+                category=FailureCategory.ESCALATION_UNRESOLVED,
+                expected=f"a human to resolve intervention {request_id!r} before it expired",
+                observed=f"intervention {request_id!r} expired with no operator resolution",
+            )
+        run_state.last_resolution = resolution.action_taken
+        return Escalated(
+            intervention_id=request_id, resolution=resolution.action_taken, resumed=True
+        )
+
+    def _rescue(
+        hard_failure: HardFailure,
+        reason_code: ReasonCode,
+        what_it_tried: str,
+        what_it_observed: str,
+        context: dict[str, str],
+    ) -> HardFailure | BusinessOutcome | Escalated | tuple[Observation, str | None]:
+        """Try one human escalation before accepting `hard_failure` (already fully built, with its
+        own evidence already captured and logged) as this step's final answer. Used by the call
+        sites with no specific refused action to re-dispatch on approval (a locator failure, an
+        unrecovered condition) -- "approved" there is treated the same as "took_control": resume,
+        not repeat, is the honest answer when there is nothing concrete to redo.
+
+        `context` (F2) is the caller's own flat detail -- at minimum the capability id and this
+        step's index, plus `trigger_reason` when the caller has one (recovery's own `why`).
+        """
+        if broker is None:
+            return hard_failure
+        request_id, resolution = _resolve_escalation(
+            broker, logger, surface, capability, reason_code, step.index, what_it_tried,
+            what_it_observed, context, intervention_ttl_s,
+        )
+        run_state.last_intervention_id = request_id
+        if resolution is None:
+            run_state.last_resolution = "expired"
+            return hard_failure.model_copy(
+                update={
+                    "category": FailureCategory.ESCALATION_UNRESOLVED,
+                    "observed": f"intervention {request_id!r} expired with no operator resolution",
+                }
+            )
+        run_state.last_resolution = resolution.action_taken
+        if resolution.action_taken == "rejected":
+            return Escalated(
+                intervention_id=request_id, resolution="rejected", resumed=run_state.resumed
+            )
+        run_state.resumed = True
+        return _resume()
+
+    def _handle_dispatch_policy_exception(
+        exc: PolicyDenied | EscalationRequired, reason_code: ReasonCode
+    ) -> Literal["fallthrough"] | HardFailure | BusinessOutcome | Escalated | tuple[
+        Observation, str | None
+    ]:
+        """Task C2: escalate a PolicyDenied/EscalationRequired raised by THIS step's own dispatch
+        (step (d), below) before accepting it as a hard failure. "approved" re-dispatches the
+        SAME action (`nonlocal result_text`) and returns "fallthrough" so the caller's own while
+        loop proceeds to steps (e)/(f) exactly as it would have on an ordinary successful dispatch
+        -- there is exactly one post-dispatch bookkeeping path in this function, not a second copy
+        of it. Every other outcome (no broker, rejected, expired, took_control) ends the step here.
+        """
+        nonlocal result_text
+        reason = _policy_exception_reason(exc)
+        refs = _capture_failure_evidence(logger, surface, step.index, before_path)
+        logger.event(
+            "hard_failure", step_id=step.index, category=FailureCategory.POLICY_DENIED.value,
+            note=reason,
+        )
+        hard_failure = HardFailure(
+            step_id=step.index,
+            category=FailureCategory.POLICY_DENIED,
+            expected=f"step {step.index} ({step.action}) to be permitted by policy",
+            observed=reason,
+            evidence_refs=refs,
+        )
+        if broker is None:
+            return hard_failure
+        request_id, resolution = _resolve_escalation(
+            broker,
+            logger,
+            surface,
+            capability,
+            reason_code,
+            step.index,
+            what_it_tried=f"attempted step {step.index} ({step.action}): {reason}",
+            what_it_observed="the policy gate refused it pending human input",
+            context=decision_context(exc.decision),
+            ttl_seconds=intervention_ttl_s,
+        )
+        run_state.last_intervention_id = request_id
+        if resolution is None:
+            run_state.last_resolution = "expired"
+            return hard_failure.model_copy(
+                update={
+                    "category": FailureCategory.ESCALATION_UNRESOLVED,
+                    "observed": f"intervention {request_id!r} expired with no operator resolution",
+                }
+            )
+        run_state.last_resolution = resolution.action_taken
+        if resolution.action_taken == "rejected":
+            return Escalated(
+                intervention_id=request_id, resolution="rejected", resumed=run_state.resumed
+            )
+        run_state.resumed = True
+        if resolution.action_taken == "approved":
+            # `broker.escalate()` (via `_resolve_escalation` above) already logged
+            # `handoff_resumed` itself (round H) -- nothing left to log here.
+            try:
+                action = _action_for_step(step, node_id, params)
+                result_text = gate.dispatch(
+                    surface,
+                    action,
+                    context={
+                        "tool": step.action,
+                        "rationale": step.rationale,
+                        "step_id": step.index,
+                    },
+                    element=element,
+                )
+            except Exception as exc2:  # noqa: BLE001 - reported as a hard failure, never swallowed
+                return HardFailure(
+                    step_id=step.index,
+                    category=FailureCategory.ACTION_FAILED,
+                    expected=f"the approved retry of step {step.index} ({step.action}) to succeed",
+                    observed=str(exc2),
+                )
+            return "fallthrough"
+        # took_control
+        return _resume()
 
     while True:
         node_id: str | None = None
@@ -623,13 +906,25 @@ def _run_step(
                         note=observed,
                         resolution=resolution.model_dump(),
                     )
-                    return HardFailure(
+                    hard_failure = HardFailure(
                         step_id=step.index,
                         category=category,
                         expected=f"a unique element matching role={step.target.role!r} "
                         f"name={interpolated_target.name!r}",
                         observed=observed,
                         evidence_refs=refs,
+                    )
+                    return _rescue(
+                        hard_failure,
+                        ReasonCode.LOCATOR_UNRESOLVED,
+                        what_it_tried=(
+                            f"tried to resolve the target for step {step.index} ({step.action})"
+                        ),
+                        what_it_observed=observed,
+                        context={
+                            "capability_id": capability.capability_id,
+                            "step_index": str(step.index),
+                        },
                     )
                 node_id = resolution.element.node_id
                 element = resolution.element
@@ -667,8 +962,36 @@ def _run_step(
                     },
                     element=element,
                 )
-            except _PolicyException as exc:
-                # A policy exception is NEVER recovered: it stays POLICY_DENIED.
+            except PolicyDenied as exc:
+                # Task C2, fixed by G1: this step's own dispatch was refused. The reason code is
+                # derived from the refusing DECISION's own rule (reason_code_for_decision,
+                # safety/policy.py), not hardcoded off the exception type -- replay's own risk
+                # refusal ("risk_replay") raises this exact exception type too, and must reach the
+                # operator console's per-action approve/reject flow the same as
+                # EscalationRequired below does, not the plain "policy_refused" every other rule
+                # (allowlist/action_type/role/forbidden_text) gets.
+                outcome = _handle_dispatch_policy_exception(
+                    exc, reason_code_for_decision(exc.decision)
+                )
+                if not isinstance(outcome, str):
+                    return outcome
+                # "fallthrough": _handle_dispatch_policy_exception already re-dispatched the same
+                # action (an approved one-shot) and updated `result_text` itself -- proceed to
+                # (e)/(f) below exactly as an ordinary successful dispatch would.
+            except EscalationRequired as exc:
+                # Task C2: this step's own RISKY_IRREVERSIBLE dispatch was refused pending human
+                # approval (unreachable in replay today -- PolicyGate only raises this in
+                # mode="discovery" -- but goes through the SAME mapping as PolicyDenied above so
+                # the two paths cannot disagree if that ever changes).
+                outcome = _handle_dispatch_policy_exception(
+                    exc, reason_code_for_decision(exc.decision)
+                )
+                if not isinstance(outcome, str):
+                    return outcome
+            except NavigationBlocked as exc:
+                # A navigation that left the allowlist means the session state is no longer
+                # trustworthy (decision 59) -- not one of task C2's five escalation triggers, so
+                # this stays exactly as it was: a POLICY_DENIED hard failure, no escalation.
                 reason = _policy_exception_reason(exc)
                 refs = _capture_failure_evidence(logger, surface, step.index, before_path)
                 logger.event(
@@ -887,12 +1210,30 @@ def _run_step(
                 if resolved_postcondition is not None
                 else f"{step_desc} to complete with no unrecovered condition"
             )
-            return HardFailure(
+            hard_failure = HardFailure(
                 step_id=step.index,
                 category=category,
                 expected=expected,
                 observed=f"{category.value} detected: {why}",
                 evidence_refs=refs,
+            )
+            # Task C2: SESSION_EXPIRED gets its own reason code; every other unrecovered
+            # category (UNHANDLED_DIALOG, APP_ERROR) is the generic unrecoverable_condition.
+            reason_code = (
+                ReasonCode.SESSION_EXPIRED
+                if category == FailureCategory.SESSION_EXPIRED
+                else ReasonCode.UNRECOVERABLE_CONDITION
+            )
+            return _rescue(
+                hard_failure,
+                reason_code,
+                what_it_tried=f"ran {step_desc}",
+                what_it_observed=f"{category.value} detected: {why}",
+                context={
+                    "capability_id": capability.capability_id,
+                    "step_index": str(step.index),
+                    "trigger_reason": why,
+                },
             )
 
         # D7 (Phase 5, extended Phase 6): the action just changed the page, so the 'after'
@@ -939,6 +1280,8 @@ def replay(
     policy_path: Path,
     allow_risky: bool = False,
     evidence_base_dir: str | Path = "evidence",
+    intervention_store: InterventionStore | None = None,
+    intervention_ttl_s: float = 900,
 ) -> ReplayResult:
     capability = Capability.model_validate_json(artifact_path.read_text(encoding="utf-8"))
     # ORDER OF OPERATIONS point 1: let UnknownDetector propagate UNCAUGHT. A capability naming a
@@ -948,7 +1291,7 @@ def replay(
     outcomes.validate(capability)
     recovery.validate(capability)
 
-    run_id = uuid.uuid4().hex[:12]
+    run_id = mint_safe_id()
     logger = EvidenceLogger(run_id, "replay", base_dir=evidence_base_dir)
     result: ReplayResult | None = None
 
@@ -1008,18 +1351,27 @@ def replay(
         return result
 
     policy = load_policy(policy_path)
+    surface = WebSurface(policy=policy, headless=False)
+    # Escalation is enabled by the presence of a broker, nothing else (task C0): no
+    # intervention_store given means broker=None, and every existing call to replay() (which
+    # never passes one) behaves exactly as it did before this task.
+    broker: SessionBroker | None = None
+    if intervention_store is not None:
+        broker = SessionBroker(surface, intervention_store, run_id=run_id, logger=logger)
     gate = PolicyGate(
         policy,
         logger,
         mode="replay",
         allow_risky=allow_risky,
         capability_status=capability.status,
+        broker=broker,
     )
-    surface = WebSurface(policy=policy, headless=False)
     # Install the dialog policy BEFORE the first navigate -- never a blanket auto-dismiss, only a
     # budgeted one (see _DialogPolicy). Kept as a typed local (not read back off surface.dialog_
     # policy, which is a bare Callable) so _run_step can call its own .reset() every step.
-    dialog_policy = _make_dialog_policy(capability)
+    # Task C3: the SAME broker also stands the dialog policy down during a handoff (any state
+    # other than AUTOMATION), before its own per-step budget is even consulted.
+    dialog_policy = _make_dialog_policy(capability, broker=broker)
     surface.dialog_policy = dialog_policy
     prefix_len = login_prefix_len(capability.steps, capability.target.entry_point)
     reauth = _make_reauth(capability, params, surface, gate, prefix_len)
@@ -1093,6 +1445,8 @@ def replay(
                 reauth,
                 prefix_len,
                 dialog_policy,
+                broker,
+                intervention_ttl_s,
             )
             if isinstance(step_result, tuple):
                 after_observation, extracted = step_result

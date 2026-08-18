@@ -1,0 +1,20 @@
+{
+  "status": "goal_verified",
+  "run_id": "idc6c0778a1d81",
+  "steps_executed": 11,
+  "rounds": 11,
+  "rejected_turns": 0,
+  "outputs": {},
+  "checkpoint": {
+    "kind": "text_present",
+    "value": "Subaccount Opened",
+    "target": "page"
+  },
+  "usage": {
+    "prompt_tokens": 34363,
+    "completion_tokens": 388,
+    "total_tokens": 34751
+  },
+  "intervention_id": "esc529e93616a",
+  "resolution": "approved"
+}

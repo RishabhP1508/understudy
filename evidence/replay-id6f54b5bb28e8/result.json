@@ -1,0 +1,14 @@
+{
+  "kind": "hard_failure",
+  "step_id": 9,
+  "category": "escalation_unresolved",
+  "expected": "step 9 (click) to be permitted by policy",
+  "observed": "intervention 'esca9892ccc05' expired with no operator resolution",
+  "evidence_refs": [
+    "steps/009_before.png",
+    "steps/009_after.png",
+    "dom/009.html",
+    "a11y/009.json",
+    "trace.zip"
+  ]
+}

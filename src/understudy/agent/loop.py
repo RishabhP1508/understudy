@@ -17,6 +17,7 @@ from __future__ import annotations
 import difflib
 import json
 import time
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Literal
 
@@ -24,11 +25,21 @@ from pydantic import BaseModel, Field, ValidationError
 
 from understudy.agent.prompts import SYSTEM_PROMPT
 from understudy.agent.tools import ALL_TOOLS
+from understudy.escalation.control import SessionBroker
 from understudy.evidence.logger import EvidenceLogger
 from understudy.llm.base import LLMClient
 from understudy.models.artifact import Checkpoint, checkpoint_satisfied
+from understudy.models.intervention import InterventionRequest, InterventionResolution, ReasonCode
 from understudy.models.observation import Observation, UIElement
-from understudy.safety.policy import EscalationRequired, PolicyDenied, PolicyGate
+from understudy.safety.policy import (
+    EscalationRequired,
+    NavigationBlocked,
+    PolicyDenied,
+    PolicyGate,
+    decision_context,
+    reason_code_for_decision,
+)
+from understudy.safety.redact import mint_safe_id
 from understudy.surface.base import Action, Click, Navigate, ReadText, Select, Surface, Type
 from understudy.surface.locator import describe
 
@@ -55,6 +66,11 @@ class RunOutcome(BaseModel):
     outputs: dict[str, str] = Field(default_factory=dict)
     checkpoint: dict[str, Any] | None = None
     usage: dict[str, Any] = Field(default_factory=dict)
+    # None on a run that never escalated. Otherwise the LAST intervention this run raised and
+    # what the operator decided (Phase 10, task C) -- so cli.py and record/recorder.py can see a
+    # human was involved even on a run that went on to complete normally afterward.
+    intervention_id: str | None = None
+    resolution: str | None = None
 
 
 def verify_checkpoint(surface: Surface, checkpoint: dict[str, Any] | Checkpoint) -> bool:
@@ -153,6 +169,65 @@ def _target_key(name: str, action: Action, context: dict[str, Any]) -> tuple[str
     return name, None
 
 
+def _resolve_escalation(
+    broker: SessionBroker,
+    logger: EvidenceLogger,
+    surface: Surface,
+    goal: str,
+    reason_code: ReasonCode,
+    what_it_tried: str,
+    what_it_observed: str,
+    context: dict[str, str],
+    ttl_seconds: float,
+) -> tuple[str, InterventionResolution | None]:
+    """Build one InterventionRequest and hand it to `SessionBroker.escalate()`
+    (escalation/control.py), the ONE shared entry point both execution paths raise an
+    intervention through. Returns `(request.id, resolution)`; `resolution` is None on expiry, so
+    the CALLER -- which alone knows what each `action_taken` means for the stopping condition it
+    is rescuing -- decides what happens next.
+
+    F1: the screenshot is taken from THIS SAME `observation` (never a second, fresher one), so
+    the request's own observation and its screenshot describe the same moment -- a stale
+    observation would position a mask over pixels the screenshot no longer shows
+    (ARCHITECTURE.md decision 47 makes the identical argument for the ordinary step
+    screenshots). None (never a broken image reference) when the surface has no
+    `screenshot_bytes` or the mask was refused; the operator page already renders that
+    honestly as "none captured".
+
+    F2: `context` is the caller's own flat, already-plain-string detail for the reason code it
+    is raising -- the refusing PolicyDecision's fields for a risk/policy refusal, or the streak
+    and its limit for a stall. Required, not defaulted, so a call site cannot silently fall back
+    to an empty dict.
+    """
+    observation = surface.observe()
+    screenshot_path = logger.escalation_screenshot(surface, observation)
+    now = datetime.now(UTC)
+    request = InterventionRequest(
+        # mint_safe_id (safety/redact.py) -- a bare hex slice can randomly come out all-digit
+        # and get silently rewritten to "[REDACTED]" by R2 the first time it is serialized,
+        # breaking every later store lookup by this id. See its docstring for the measured
+        # probability and why a fixed prefix is the whole-class fix, not a per-field exemption.
+        id=mint_safe_id(prefix="esc", length=10),
+        run_id=logger.run_id,
+        capability_id=None,
+        goal=goal,
+        step_id=None,
+        reason_code=reason_code,
+        what_it_tried=what_it_tried,
+        what_it_observed=what_it_observed,
+        observation=observation,
+        screenshot_path=(
+            screenshot_path.relative_to(logger.dir).as_posix()
+            if screenshot_path is not None
+            else None
+        ),
+        context=context,
+        created_at=now.isoformat(),
+        expires_at=(now + timedelta(seconds=ttl_seconds)).isoformat(),
+    )
+    return request.id, broker.escalate(request, logger)
+
+
 def run(
     goal: str,
     target: str,
@@ -164,6 +239,8 @@ def run(
     timeout_s: float,
     stall_limit: int = 3,
     full_render_every: int = 5,
+    broker: SessionBroker | None = None,
+    intervention_ttl_s: float = 900,
 ) -> RunOutcome:
     start = time.monotonic()
     rounds = 0
@@ -186,6 +263,18 @@ def run(
     last_action_key: tuple[str, str | None] | None = None
     repeat_streak = 0
 
+    # Escalation is enabled by the presence of `broker`, nothing else (task C0): a run constructed
+    # with broker=None (every test predating this phase, and any caller that opts out) behaves
+    # exactly as it did before this phase existed. `last_intervention_id`/`last_resolution` track
+    # the LAST intervention this run raised, however it resolved, so `_end()` can attach it to
+    # every terminal event and RunOutcome from here on -- including a run that was rescued and
+    # then went on to finish normally, which still needs to say a human was involved.
+    last_intervention_id: str | None = None
+    last_resolution: str | None = None
+    # A rescued MAX_STEPS escalation extends the budget by the run's OWN original allowance,
+    # rather than re-triggering the identical condition on the very next round with zero headroom.
+    original_max_steps = max_steps
+
     def _end(
         status: RunStatus,
         checkpoint: dict[str, Any] | None = None,
@@ -196,11 +285,16 @@ def run(
         # every stopping condition (including goal_verified, below) routes through here rather
         # than reimplementing this shape inline. `checkpoint` rides into the returned RunOutcome
         # only, never into the event: the separate `goal_verified` event already carries the
-        # checkpoint under `checkpoint_eval`.
+        # checkpoint under `checkpoint_eval`. `intervention_id`/`escalation_resolution` ride into
+        # both the event and the outcome automatically -- no call site passes them, so a call
+        # site cannot forget to (`resolution` is already RunEvent's own field name for a locator
+        # Resolution dump, hence `escalation_resolution` here rather than colliding with it).
         logger.run_end(
             status.value,
             rounds=rounds,
             steps_executed=steps_executed,
+            intervention_id=last_intervention_id,
+            escalation_resolution=last_resolution,
             **event_fields,
         )
         return RunOutcome(
@@ -212,7 +306,44 @@ def run(
             outputs=outputs,
             checkpoint=checkpoint,
             usage=usage_totals,
+            intervention_id=last_intervention_id,
+            resolution=last_resolution,
         )
+
+    def _escalate_stall(
+        reason_code: ReasonCode,
+        what_it_tried: str,
+        what_it_observed: str,
+        context: dict[str, str],
+    ) -> bool:
+        """Try to rescue THE STOPPING CONDITION THAT JUST FIRED through a human escalation.
+
+        True (the loop should keep going) once a human resolved it as `approved` or
+        `took_control`. Draining the surface's captured human actions and logging
+        `handoff_resumed` both now happen inside `broker.escalate()` itself (round H) -- the ONE
+        shared entry point, so this caller (and the other two below) no longer needs its own copy
+        of either. `approved` has no specific refused action to re-dispatch at any of the FOUR
+        call sites this serves (no_progress, loop_detected, dead_end, max_steps) -- unlike
+        RISKY_ACTION_REQUIRES_APPROVAL and POLICY_REFUSED, both handled inline where the action
+        that was actually refused is still in scope -- so it is treated the same as
+        `took_control`: the model's next turn just sees a fresh observation.
+
+        False -- the run must end under its ORIGINAL status -- when no broker is configured, the
+        operator rejected it, or the intervention expired unanswered.
+
+        `context` (F2) is the caller's own streak/limit detail: which counter fired, and against
+        what limit, so an operator can see the run was genuinely stuck rather than merely slow.
+        """
+        nonlocal last_intervention_id, last_resolution
+        if broker is None:
+            return False
+        request_id, resolution = _resolve_escalation(
+            broker, logger, surface, goal, reason_code, what_it_tried, what_it_observed,
+            context, intervention_ttl_s,
+        )
+        last_intervention_id = request_id
+        last_resolution = resolution.action_taken if resolution is not None else "expired"
+        return resolution is not None and resolution.action_taken != "rejected"
 
     messages: list[dict[str, Any]] = []
     gate.dispatch(
@@ -229,6 +360,14 @@ def run(
 
     while True:
         if rounds >= max_steps:
+            if _escalate_stall(
+                ReasonCode.MAX_STEPS,
+                what_it_tried=f"used its full step budget ({max_steps} steps)",
+                what_it_observed="the goal's success checkpoint was never verified",
+                context={"steps_used": str(rounds), "max_steps": str(max_steps)},
+            ):
+                max_steps += original_max_steps
+                continue
             return _end(RunStatus.MAX_STEPS)
         if time.monotonic() - start > timeout_s:
             return _end(RunStatus.TIMEOUT)
@@ -351,6 +490,19 @@ def run(
             logger.event("rejected_turn", reason=str(exc), tool=name, args=args)
             messages.append({"role": "tool", "name": name, "response": {"error": str(exc)}})
             if dead_end_streak >= stall_limit:
+                if _escalate_stall(
+                    ReasonCode.LOCATOR_UNRESOLVED,
+                    what_it_tried=(
+                        f"tried to resolve a target for {name!r} {dead_end_streak} times in a row"
+                    ),
+                    what_it_observed=str(exc),
+                    context={
+                        "dead_end_streak": str(dead_end_streak),
+                        "stall_limit": str(stall_limit),
+                    },
+                ):
+                    dead_end_streak = 0
+                    continue
                 return _end(RunStatus.DEAD_END, dead_end_streak=dead_end_streak)
             continue
 
@@ -373,9 +525,7 @@ def run(
         try:
             result_text = gate.dispatch(surface, action, context=context, element=element)
         except PolicyDenied as exc:
-            # A refused-but-retryable turn; NavigationBlocked is NOT caught (D5): a navigation
-            # that escaped the allowlist means the session state is no longer trustworthy, so it
-            # propagates and ends the run rather than being retried.
+            # A refused-but-retryable turn; NavigationBlocked is handled separately, below.
             rejected_turns += 1
             logger.event(
                 "rejected_turn", reason=exc.decision.reason, tool=name, rule=exc.decision.rule
@@ -389,15 +539,92 @@ def run(
             )
             continue
         except EscalationRequired as exc:
-            # D5: a RISKY_IRREVERSIBLE action the gate itself refused in discovery mode is now a
-            # stopping condition, not a propagated exception -- a human is needed, the same as an
-            # explicit `escalate` call, just triggered by policy rather than by the model's choice.
-            return _end(
-                RunStatus.ESCALATION,
-                phase="escalate",
-                reason=exc.decision.reason,
-                rule=exc.decision.rule,
+            # D5: a RISKY_IRREVERSIBLE action the gate itself refused in discovery mode is a
+            # stopping condition, the same as an explicit `escalate` call, just triggered by
+            # policy rather than by the model's choice. With a broker present, this is exactly
+            # the path a one-shot human approval exists for (task C): try to rescue it before
+            # ending the run under it.
+            if broker is None:
+                return _end(
+                    RunStatus.ESCALATION,
+                    phase="escalate",
+                    reason=exc.decision.reason,
+                    rule=exc.decision.rule,
+                )
+            request_id, resolution = _resolve_escalation(
+                broker,
+                logger,
+                surface,
+                goal,
+                # G1: derived from the decision's own rule (safety/policy.py's
+                # reason_code_for_decision), the same call replay/engine.py makes for the
+                # identical "risk_replay" rule -- discovery's own rule here is always
+                # "risk_discovery" (PolicyGate only raises EscalationRequired in mode="discovery"),
+                # so this is a no-op in practice today, but it is the ONE place that decides this
+                # mapping rather than a second hardcoded copy of it.
+                reason_code_for_decision(exc.decision),
+                what_it_tried=(
+                    f"attempted a RISKY_IRREVERSIBLE action ({name}): {exc.decision.reason}"
+                ),
+                what_it_observed="the policy gate refused it pending human approval",
+                context=decision_context(exc.decision),
+                ttl_seconds=intervention_ttl_s,
             )
+            last_intervention_id = request_id
+            last_resolution = resolution.action_taken if resolution is not None else "expired"
+            if resolution is None or resolution.action_taken == "rejected":
+                return _end(
+                    RunStatus.ESCALATION,
+                    phase="escalate",
+                    reason=exc.decision.reason,
+                    rule=exc.decision.rule,
+                )
+            if resolution.action_taken == "took_control":
+                # Draining and logging `handoff_resumed` both already happened inside
+                # `broker.escalate()` itself (round H) -- nothing left to do here but continue.
+                continue
+            # "approved": PolicyGate.dispatch consumes the one-shot approval (keyed off the
+            # CURRENT control token's own intervention_id, which escalate() already restored to
+            # AUTOMATION -- escalation/control.py's ControlToken docstring) and lets the SAME
+            # action through this time. Deliberately falls through to the ordinary post-dispatch
+            # bookkeeping below rather than a second copy of it -- there is exactly one dispatch
+            # success path in this loop. `escalate()` already logged `handoff_resumed`.
+            result_text = gate.dispatch(surface, action, context=context, element=element)
+        except NavigationBlocked as exc:
+            # A navigation that left the allowlist means the session state is no longer
+            # trustworthy (decision 59): with no broker this still propagates uncaught and ends
+            # the run, unchanged from before this phase. With one, it is worth one human look
+            # before giving up on the whole run -- but neither "approved" nor "took_control" ever
+            # re-dispatches the SAME action here (unlike the risky-action case above): the
+            # navigation already executed, off-allowlist, so the honest next step either way is a
+            # fresh observation next round, not blindly repeating what just went wrong.
+            if broker is None:
+                raise
+            request_id, resolution = _resolve_escalation(
+                broker,
+                logger,
+                surface,
+                goal,
+                ReasonCode.POLICY_REFUSED,
+                what_it_tried=f"dispatched {name!r}, which navigated off the allowlist",
+                what_it_observed=f"navigation left the allowlist: {exc.urls}",
+                context={
+                    "reason": f"navigation left the allowlist: {exc.urls}",
+                    "action_kind": name,
+                },
+                ttl_seconds=intervention_ttl_s,
+            )
+            last_intervention_id = request_id
+            last_resolution = resolution.action_taken if resolution is not None else "expired"
+            if resolution is None or resolution.action_taken == "rejected":
+                return _end(
+                    RunStatus.ESCALATION,
+                    phase="escalate",
+                    reason=f"navigation left the allowlist: {exc.urls}",
+                )
+            # Draining and logging `handoff_resumed` (for either "took_control" or "approved")
+            # both already happened inside `broker.escalate()` itself (round H).
+            continue
         steps_executed += 1
         dead_end_streak = 0
 
@@ -418,6 +645,17 @@ def run(
         else:
             no_progress_streak = 0
         if no_progress_streak >= stall_limit:
+            if _escalate_stall(
+                ReasonCode.STUCK_NO_PROGRESS,
+                what_it_tried=f"dispatched {name!r} {no_progress_streak} times in a row",
+                what_it_observed="the observation's structure has not changed since",
+                context={
+                    "no_progress_streak": str(no_progress_streak),
+                    "stall_limit": str(stall_limit),
+                },
+            ):
+                no_progress_streak = 0
+                continue
             return _end(RunStatus.NO_PROGRESS, no_progress_streak=no_progress_streak)
 
         # loop_detected: the same (tool, resolved target) dispatched stall_limit times running.
@@ -428,4 +666,15 @@ def run(
             repeat_streak = 1
         last_action_key = action_key
         if repeat_streak >= stall_limit:
+            if _escalate_stall(
+                ReasonCode.LOOP_DETECTED,
+                what_it_tried=(
+                    f"dispatched {name!r} against the same target {repeat_streak} times in a row"
+                ),
+                what_it_observed="the model kept repeating the same action",
+                context={"repeat_streak": str(repeat_streak), "stall_limit": str(stall_limit)},
+            ):
+                repeat_streak = 0
+                last_action_key = None
+                continue
             return _end(RunStatus.LOOP_DETECTED, repeat_streak=repeat_streak, tool=name)

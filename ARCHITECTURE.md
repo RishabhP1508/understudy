@@ -378,3 +378,81 @@ raises an error instead of going quietly dormant.
     sequential, prefix-unsafe `str.replace` chain rather than one regex pass. All four are fixed.
     None changed the shipped artifact (verified by rebuilding it in memory and diffing field by
     field against the file on disk). See `docs/adr/0013`.
+
+## Phase 9 decisions
+
+69. A `KnownOutcome.detector` and a `RecoveryRule.trigger` name a registered PURE PREDICATE, not
+    prose, and both registries are resolved when the artifact is loaded. An unknown name raises
+    rather than never matching. Why: a business-outcome detector that quietly never fires is
+    exactly how "no such member" reaches the caller as a crash, which is the mistake the brief
+    names as the most common in this problem. See `docs/adr/0014`.
+70. Detectors are pure over an `Observation`; triggers additionally see the step index, the login
+    prefix boundary, the surface's `last_navigation`, and any native dialogs since the last check.
+    Why: whether a record exists is a fact about the screen, but "the session died mid-flow" and
+    "a navigation is still in flight" are not properties of a screenshot. One trigger registry
+    serves both the declared recovery rules and the engine's unrecovered-condition mapping, so
+    there is one vocabulary of conditions rather than a second private list in the engine.
+71. Per step, after the action runs: known outcomes, then recovery rules, then the postcondition.
+    A recovery re-evaluates the same step; only `reauth` re-dispatches the step's own action,
+    because only it invalidates what the action did. Why this order, in full: `docs/adr/0014`.
+72. Seeds are gated on two different axes. A known outcome is gated on what the flow can PRODUCE,
+    because a declared outcome the flow cannot reach is a false contract. A recovery rule is gated
+    on whether replay can PERFORM it, because a dialog or a slow load can happen to any flow and
+    gating those on "did this run hit one" would strip every rule from every clean recording.
+    Measured: the read-only balance lookup no longer declares `insufficient_funds`.
+73. Drift is reported without inventing a baseline. `TargetDescriptor.recorded_rank` is measured by
+    `describe()` where it can be, and is None on every artifact recorded before the field existed;
+    the second clause, "a non-empty recorded name resolved on a strategy that did not match that
+    name", needs no baseline and is what catches the real case. Why not assume rank 1 for legacy
+    descriptors: a drift signal that cries wolf is worse than one that stays quiet. Measured: zero
+    drift events on the happy path, one on a deliberately mutated name.
+74. `BusinessOutcome` carries `code`, `message` and `observed`, mirroring `HardFailure`'s
+    `expected`/`observed`. The declared `message_template` is the caller's message; the
+    application's literal words are evidence. Why: Phase 12 puts two tenants of one vendor product
+    behind a single capability, and they will word the same outcome differently.
+75. The one deliberate timed delay in the system is `WebSurface.pause`, used only by the retry
+    rule's exponential backoff. It lives in `surface/` because decision 18 bans fixed sleeps under
+    `replay/`, and a retry backoff is a deliberate delay rather than a condition wait. Naming it
+    honestly beats hiding it behind a fabricated condition.
+76. A recovery executor never degrades to reporting success for work it did not do. The
+    `getattr`-and-return-a-string branches were deleted and recovery's surface parameter is typed
+    concretely, so an absent capability raises at the call site. Why: the same shape as decisions
+    44 and 42's blind spots, and a `recovered` event for a recovery that never happened makes the
+    evidence log lie.
+
+## Phase 10 decisions
+
+77. The control token has FOUR states (AUTOMATION, PENDING_HANDOFF, HUMAN, PENDING_RESUME) and only
+    AUTOMATION permits a dispatch. Why not a boolean: the two transient states are the windows in
+    which NOBODY should act, because the runner has stopped but the human has not accepted, or the
+    human has handed back but the runner has not re-observed. Both refuse. See `docs/adr/0015`.
+78. `PolicyGate.dispatch` consults the broker as check 0, before anything about the action is
+    inspected, and refuses with an ordinary `PolicyDenied`. Why there: invariant 2 already proves
+    `Surface.act` has exactly one call site, so "only the holder may act" becomes a property of the
+    code rather than a convention spread across two runners.
+79. An operator approval is external state, consumed exactly once, read from the store. It is never
+    a `dispatch(approved=True)` argument, because the value of a choke point is that a caller cannot
+    argue its way past it. The first implementation kept it in memory on the broker and could not
+    have crossed the process boundary it exists for; its test passed only because it granted and
+    consumed on one object.
+80. The handoff is the same session because Chromium is headed and there is nothing to hand over.
+    The cost is that a sync Playwright page is thread-bound, so no test can act as the human while
+    the runner blocks; tests act as the operator on the same thread, and the genuinely manual half
+    is produced by a person.
+81. Resume is not blind: re-observe, then skip the step if its postcondition now holds, retry if its
+    precondition holds, escalate again as `unrecoverable_condition` if neither. The recorded
+    postcondition is the only thing that knows which of those a human left behind, and the step this
+    phase exists to unblock is an irreversible submit.
+82. An escalation reason code is derived from the refusing `PolicyDecision`'s own `rule`, never from
+    which exception type carried it. Discovery raises `EscalationRequired` and replay raises
+    `PolicyDenied` for the same underlying risk refusal, so keying off the type made the same
+    condition produce two codes and left replay approval unreachable from the console.
+83. Human-action capture is installed in `WebSurface.__init__`, unconditionally, and drained once in
+    `SessionBroker.escalate()` with a discard-then-keep window around the handoff. Why in the
+    constructor: the defect it replaces was two runners that had to remember to call it and neither
+    did, so the wiring had to stop being forgettable. Why the window rather than a filter: capture is
+    always on, so the agent's own actions are captured too, and everything between the discard and
+    the keep happened while the token was out of AUTOMATION, which by construction excludes them.
+84. A test that proves a mechanism is not a test that proves its wiring. Four defects this phase were
+    unreachable from a real run while passing their own tests. The check that distinguishes the two
+    is to sever the production call with a one-line edit and confirm a test fails.

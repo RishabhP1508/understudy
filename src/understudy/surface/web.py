@@ -23,9 +23,11 @@ from collections.abc import Callable
 from typing import Any, Literal
 from urllib.parse import urlparse
 
+from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 from playwright.sync_api import sync_playwright
 
+from understudy.models.intervention import HumanAction
 from understudy.models.observation import Observation, UIElement
 from understudy.safety.policy import Policy
 from understudy.surface.base import Action, Click, Key, Navigate, ReadText, Select, Type
@@ -42,6 +44,113 @@ _ATTR_NAME_CAP = 30
 # Bounded window (measured, not guessed -- see docs/adr/0005-child-frame-navigation-wait.md) to
 # detect whether a click started a navigation at all, before deciding it did not.
 _NAV_DETECT_TIMEOUT_MS = 300
+
+# R6 human-action capture (task B): the cap on how many raw DOM events a handoff can accumulate
+# in window.sessionStorage before the oldest are dropped -- named here, not buried in the
+# injected script, so the docstring that promises "say what the cap is" has one number to point
+# at. 500 is generous for a manual handoff (a human clicking/typing through a stuck form is
+# nowhere near this many discrete DOM events) while still bounding memory for a handoff nobody
+# ends.
+_HUMAN_ACTION_CAP = 500
+
+# Round J: the bound on the settle wait `drain_human_actions` performs when a read fails because
+# a navigation destroyed the execution context (see that method's own docstring). Reuses
+# replay/recovery.py's `_WAIT_TIMEOUT_MS` value for the identical underlying primitive ("wait for
+# an in-flight navigation to settle") rather than inventing a second magic number for the same
+# wait.
+_HUMAN_ACTION_DRAIN_SETTLE_TIMEOUT_MS = 8000
+
+# Kept deliberately tiny (ladder step: the DOM traversal that only JS can do -- tagName, input
+# type, and the best name-ish string visible from the element -- stays in JS; translating that
+# into the project's role vocabulary happens in Python, in `_human_action_role`, where the
+# vocabulary already lives). Stored in window.sessionStorage rather than a plain JS variable so
+# it SURVIVES navigation and reload within the tab (a plain variable is wiped by the next
+# navigation's fresh JS environment); add_init_script re-installs the listeners on every
+# navigation, sessionStorage carries the accumulated data across them.
+_HUMAN_ACTION_CAPTURE_SCRIPT = """
+(() => {
+  const CAP = %d;
+  const KEY = "__understudy_human_actions";
+  function push(rec) {
+    try {
+      const raw = window.sessionStorage.getItem(KEY);
+      const arr = raw ? JSON.parse(raw) : [];
+      arr.push(rec);
+      while (arr.length > CAP) arr.shift();
+      window.sessionStorage.setItem(KEY, JSON.stringify(arr));
+    } catch (e) { /* sessionStorage unavailable (e.g. a sandboxed frame): drop silently */ }
+  }
+  function bestName(el) {
+    if (!el || typeof el.getAttribute !== "function") return "";
+    let v = el.getAttribute("aria-label");
+    if (v) return v.trim();
+    v = el.getAttribute("placeholder");
+    if (v) return v.trim();
+    v = el.getAttribute("name");
+    if (v) return v.trim();
+    if (el.id) {
+      const label = document.querySelector("label[for='" + el.id + "']");
+      if (label && label.innerText) return label.innerText.trim();
+    }
+    const enclosing = el.closest ? el.closest("label") : null;
+    if (enclosing && enclosing.innerText) return enclosing.innerText.trim();
+    const tag = (el.tagName || "").toLowerCase();
+    if ((tag === "button" || tag === "a") && el.innerText) return el.innerText.trim();
+    return "";
+  }
+  function record(kind, el) {
+    push({
+      k: kind,
+      t: el ? (el.tagName || "").toLowerCase() : "",
+      it: el ? (el.type || "") : "",
+      n: el ? bestName(el) : "",
+      v: el && el.value !== undefined ? String(el.value) : null,
+      u: null,
+      at: new Date().toISOString(),
+    });
+  }
+  document.addEventListener("click", (e) => record("click", e.target), true);
+  document.addEventListener("input", (e) => record("input", e.target), true);
+  document.addEventListener("change", (e) => record("change", e.target), true);
+  push({k: "navigate", t: "", it: "", n: "", v: null, u: location.href,
+        at: new Date().toISOString()});
+})();
+"""
+
+# Maps a raw DOM `input.type` onto the project's normalized role vocabulary
+# (models/observation.py, policy.allowed_roles) -- anything not listed here falls back to
+# "textbox" in `_human_action_role` below, which covers text/email/password/... input types with
+# no special-cased role of their own.
+_INPUT_TYPE_TO_ROLE: dict[str, str] = {
+    "checkbox": "checkbox",
+    "radio": "radio",
+    "search": "searchbox",
+    "submit": "button",
+    "button": "button",
+    "reset": "button",
+    "image": "button",
+}
+
+
+def _human_action_role(tag: str, input_type: str) -> str:
+    """Raw DOM tag/input-type -> this project's normalized role vocabulary, done here in Python
+    rather than in the injected script (HumanAction's own docstring: this is the whole point of
+    recording a human's actions in the SAME terms as the agent's own recorded steps)."""
+    tag = tag.lower()
+    input_type = input_type.lower()
+    if tag == "select":
+        return "combobox"
+    if tag == "option":
+        return "option"
+    if tag == "a":
+        return "link"
+    if tag == "button":
+        return "button"
+    if tag == "textarea":
+        return "textbox"
+    if tag == "input":
+        return _INPUT_TYPE_TO_ROLE.get(input_type, "textbox")
+    return tag
 
 
 def _match_sensitivity(
@@ -240,6 +349,19 @@ class WebSurface:
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(headless=headless)
         self._page = self._browser.new_page()
+        # Round H (H1): installed HERE, unconditionally, for every surface -- not by the two
+        # runners that used to be expected to remember to call `install_human_action_capture()`
+        # themselves. That was the actual defect: it had exactly one caller in the whole tree and
+        # it was a test, so `drain_human_actions` always returned `[]` in both real execution
+        # paths. `__init__` is the only place that is true by construction for every surface a
+        # caller can build, including one a test constructs directly -- and `add_init_script`
+        # must be registered before any page loads for the listener to be present on the first
+        # document, which is exactly what happens here, before any `Navigate` action can run. The
+        # cost is one `add_init_script` call and a little `sessionStorage` bookkeeping per surface,
+        # paid whether or not a handoff ever happens -- worth it to remove a whole class of silent
+        # failure (escalation/control.py's `SessionBroker.escalate()` now drains unconditionally
+        # too, and depends on this always having run).
+        self.install_human_action_capture()
         self._index_to_ref: dict[str, str] = {}
         # Native browser dialogs (window.confirm/alert/prompt) block Playwright's own
         # navigation and action calls until answered. `dialog_policy` is the recovery-policy
@@ -621,6 +743,97 @@ class WebSurface:
         """
         content: str = self._page.content()
         return content
+
+    def install_human_action_capture(self) -> None:
+        """Install the document-level click/input/change listeners (task B, R6 "record what the
+        human did") via `add_init_script` rather than a one-off `evaluate` call: an init script
+        re-runs on every navigation this page (and every child frame) makes, so the capture
+        survives a human clicking through several pages during a handoff -- the normal case --
+        where a one-off `evaluate` would only ever see whatever page happened to be loaded the
+        moment it ran. Called once, unconditionally, from `__init__` (round H) -- see that
+        docstring for why a call site a caller has to remember is exactly the defect this fixes.
+
+        CANNOT see a native browser dialog: a human answering a `window.confirm` produces no DOM
+        event at all -- see `HumanAction`'s own docstring; that case is evidenced instead by
+        `dialog_events`' own `handled` value.
+        """
+        self._page.add_init_script(_HUMAN_ACTION_CAPTURE_SCRIPT % _HUMAN_ACTION_CAP)
+
+    def _read_human_action_buffer(self) -> list[dict[str, Any]]:
+        """One `page.evaluate()` round trip: read the captured array out of the MAIN FRAME's
+        `sessionStorage` and clear it. See `drain_human_actions`'s own docstring (Finding 1) for
+        why the main frame is the right read target even when the human acted inside a child
+        frame, and (Finding 2) for the navigation race this call can lose."""
+        result: list[dict[str, Any]] = self._page.evaluate(
+            "() => { const k = '__understudy_human_actions'; "
+            "const v = window.sessionStorage.getItem(k); "
+            "window.sessionStorage.removeItem(k); "
+            "return v ? JSON.parse(v) : []; }"
+        )
+        return result
+
+    def drain_human_actions(self) -> list[HumanAction]:
+        """Read the captured array out of `sessionStorage`, clear it, and map each raw record
+        into a typed `HumanAction`. The tag/input-type -> role translation happens here, in
+        Python (`_human_action_role`), not in the injected script, which stays as small as the
+        ladder allows.
+
+        FINDING 1 -- the main frame is the CORRECT read target, not a wrong-frame bug: this
+        app's frameset shell and its content frame are same-origin, and `sessionStorage` is
+        shared across every same-origin frame in one tab. Measured directly against this
+        fixture: a single `page.evaluate()` on the shell (this method never touches a child
+        frame) returned three actions that were actually performed *inside* `contentframe` (an
+        `input` and a `change` on `f7`, and a `click` on "Search"). So there is no frame-walking
+        to add here, and no data loss from reading the shell instead of whichever frame the
+        human happened to be looking at.
+
+        FINDING 2 -- the real defect this closes: a human's actual click is not wrapped in this
+        surface's own `_click_and_settle` wait at all, because a real human clicks the visible
+        browser window directly; Playwright only ever *observes* that click, via the page-level
+        request listeners `__init__` installs unconditionally. If the human's LAST action before
+        control comes back started a navigation, this method's own read can land in the instant
+        between the OLD document's execution context being torn down and the NEW one existing --
+        Playwright surfaces that as `Error: ... Execution context was destroyed, most likely
+        because of a navigation`, for either the main frame or a child frame depending on which
+        one the human's last action navigated (reproduced against this fixture for both).
+        `sessionStorage` itself survives the navigation intact (the same fact Finding 1 measures
+        for frames also holds across a reload), so waiting for the navigation to settle before
+        reading costs nothing and loses nothing.
+
+        The fix: read the buffer; if that read raises because a navigation tore down the
+        execution context it was reading from, wait for the navigation to settle
+        (`wait_for_navigation_to_settle`, this class's own condition wait, never a fixed sleep)
+        and read once more. There is no settle call before the first read -- a raw, unwrapped
+        human click leaves `_pending_navigations` still empty at that point, because Playwright
+        has not yet been told the resulting request even started, so a settle call placed there
+        has nothing to wait on and cannot prevent the race. The retry is capped at one: a second
+        failure past that point is treated as genuine and propagates. Both the wait and the
+        retry are bounded, so this can neither hang the run nor loop.
+        """
+        try:
+            raw = self._read_human_action_buffer()
+        except PlaywrightError:
+            self.wait_for_navigation_to_settle(_HUMAN_ACTION_DRAIN_SETTLE_TIMEOUT_MS)
+            raw = self._read_human_action_buffer()
+        actions: list[HumanAction] = []
+        for item in raw:
+            kind = item.get("k", "click")
+            role = (
+                ""
+                if kind == "navigate"
+                else _human_action_role(item.get("t", ""), item.get("it", ""))
+            )
+            actions.append(
+                HumanAction(
+                    kind=kind,
+                    role=role,
+                    name=item.get("n") or "",
+                    value=item.get("v"),
+                    url=item.get("u"),
+                    at=item.get("at", ""),
+                )
+            )
+        return actions
 
     @property
     def tracing(self) -> Any:

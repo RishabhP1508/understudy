@@ -31,7 +31,7 @@ from understudy.safety.policy import (
     PolicyGate,
     load_policy,
 )
-from understudy.safety.redact import Redactor, redact_screenshot
+from understudy.safety.redact import Redactor, mint_safe_id, redact_screenshot
 from understudy.safety.risk import RiskClass, classify
 from understudy.surface.base import Action, Click, Navigate, ReadText, Type
 from understudy.surface.locator import RelationalHint, TargetDescriptor
@@ -154,6 +154,46 @@ def test_secret_sentinel_nested_inside_a_list_is_still_redacted() -> None:
 
     assert "SECRET_SENTINEL_VALUE" not in out
     assert "[REDACTED]" in out
+
+
+# ----------------------------------------------------------------------------------------
+# Regression (defect 3): every id this codebase mints and later looks up by value (run_id,
+# intervention id) must survive Redactor().dumps() unchanged. A bare uuid4().hex[:n] slice is
+# all-ASCII-digits with probability 0.625**n (10 of 16 hex digits are decimal), and R2's
+# account_number pattern (`\b\d{9,}\b`) redacts ANY such id on first serialization, breaking
+# every later lookup by that same value -- see mint_safe_id's own docstring. This test proves
+# the fix (a fixed, non-digit, no-separator prefix) rather than asserting it.
+# ----------------------------------------------------------------------------------------
+
+
+def test_mint_safe_id_survives_redaction_across_many_ids() -> None:
+    # Under the OLD bare-hex scheme, P(all-digit) is 0.625**12 =~ 0.355% (1 in 281) at length 12
+    # and 0.625**10 =~ 0.909% (1 in 110) at length 10 -- the two (length) combinations actually
+    # used in the codebase (run ids, escalation ids). Over N=3000 iterations, the OLD scheme's
+    # EXPECTED number of all-digit hits is ~10.7 at length 12 and ~27.3 at length 10, so this
+    # count would all but certainly have produced and caught the bug before the fix (the
+    # probability of zero hits at the harder, length-12 case is e**-10.7, effectively zero).
+    n = 3000
+    redactor = Redactor()
+    for _ in range(n):
+        run_id = mint_safe_id()  # the run_id sites: cli.py, replay/engine.py
+        out = redactor.dumps({"run_id": run_id})
+        assert run_id in out, f"run_id {run_id!r} was mangled: {out!r}"
+
+        escalation_id = mint_safe_id(prefix="esc", length=10)  # the intervention-id sites
+        out = redactor.dumps({"id": escalation_id})
+        assert escalation_id in out, f"id {escalation_id!r} was mangled: {out!r}"
+
+
+def test_bare_all_digit_id_still_redacts() -> None:
+    """Pins the underlying hazard mint_safe_id exists to route around: a bare all-digit
+    12-character string -- exactly what an unprefixed uuid4().hex[:12] slice can randomly
+    produce -- is still silently redacted by R2 today. If a future change ever strips
+    mint_safe_id's prefix (or routes an id through raw uuid4().hex slicing again), THIS test is
+    what fails, not just the probabilistic one above."""
+    out = Redactor().dumps({"run_id": "123456789012"})
+
+    assert out == '{"run_id": "[REDACTED]"}'
 
 
 # ----------------------------------------------------------------------------------------

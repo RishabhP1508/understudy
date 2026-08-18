@@ -1,0 +1,826 @@
+{
+  "request": {
+    "id": "escb4e73c2bb2",
+    "run_id": "idb0f1bf67e185",
+    "capability_id": "look-up-member-12345-and-read-their-current-savings-balance",
+    "goal": "Logs into the member portal, searches for a specific member by ID, and retrieves their current savings balance.",
+    "step_id": 2,
+    "reason_code": "session_expired",
+    "what_it_tried": "ran step 2 (click 'Login')",
+    "what_it_observed": "session_expired detected: the observation shows the login form (a 'Login' button) mid-flow",
+    "observation": {
+      "url": "http://127.0.0.1:5055/login",
+      "title": "Legacy Bank - Login",
+      "elements": [
+        {
+          "node_id": "0",
+          "role": "table",
+          "name": "",
+          "value": null,
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 0,
+          "frame_path": [],
+          "ancestors": [],
+          "name_source": "none"
+        },
+        {
+          "node_id": "1",
+          "role": "rowgroup",
+          "name": "",
+          "value": null,
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 1,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "table",
+              ""
+            ]
+          ],
+          "name_source": "none"
+        },
+        {
+          "node_id": "2",
+          "role": "row",
+          "name": "",
+          "value": null,
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 2,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "rowgroup",
+              ""
+            ],
+            [
+              "table",
+              ""
+            ]
+          ],
+          "name_source": "none"
+        },
+        {
+          "node_id": "3",
+          "role": "cell",
+          "name": "Legacy Bank Back Office",
+          "value": null,
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 3,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "row",
+              ""
+            ],
+            [
+              "rowgroup",
+              ""
+            ],
+            [
+              "table",
+              ""
+            ]
+          ],
+          "name_source": "a11y"
+        },
+        {
+          "node_id": "4",
+          "role": "row",
+          "name": "",
+          "value": null,
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 2,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "rowgroup",
+              ""
+            ],
+            [
+              "table",
+              ""
+            ]
+          ],
+          "name_source": "none"
+        },
+        {
+          "node_id": "5",
+          "role": "cell",
+          "name": "",
+          "value": null,
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 3,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "row",
+              ""
+            ],
+            [
+              "rowgroup",
+              ""
+            ],
+            [
+              "table",
+              ""
+            ]
+          ],
+          "name_source": "none"
+        },
+        {
+          "node_id": "6",
+          "role": "text",
+          "name": "Legacy Bank Back Office",
+          "value": "Username and password are required.",
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 4,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "cell",
+              ""
+            ],
+            [
+              "row",
+              ""
+            ],
+            [
+              "rowgroup",
+              ""
+            ],
+            [
+              "table",
+              ""
+            ]
+          ],
+          "name_source": "column_header"
+        },
+        {
+          "node_id": "7",
+          "role": "table",
+          "name": "",
+          "value": null,
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 4,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "cell",
+              ""
+            ],
+            [
+              "row",
+              ""
+            ],
+            [
+              "rowgroup",
+              ""
+            ],
+            [
+              "table",
+              ""
+            ]
+          ],
+          "name_source": "none"
+        },
+        {
+          "node_id": "8",
+          "role": "rowgroup",
+          "name": "",
+          "value": null,
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 5,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "table",
+              ""
+            ],
+            [
+              "cell",
+              ""
+            ],
+            [
+              "row",
+              ""
+            ],
+            [
+              "rowgroup",
+              ""
+            ],
+            [
+              "table",
+              ""
+            ]
+          ],
+          "name_source": "none"
+        },
+        {
+          "node_id": "9",
+          "role": "row",
+          "name": "",
+          "value": null,
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 6,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "rowgroup",
+              ""
+            ],
+            [
+              "table",
+              ""
+            ],
+            [
+              "cell",
+              ""
+            ],
+            [
+              "row",
+              ""
+            ],
+            [
+              "rowgroup",
+              ""
+            ]
+          ],
+          "name_source": "none"
+        },
+        {
+          "node_id": "10",
+          "role": "cell",
+          "name": "Username",
+          "value": null,
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 7,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "row",
+              ""
+            ],
+            [
+              "rowgroup",
+              ""
+            ],
+            [
+              "table",
+              ""
+            ],
+            [
+              "cell",
+              ""
+            ],
+            [
+              "row",
+              ""
+            ]
+          ],
+          "name_source": "a11y"
+        },
+        {
+          "node_id": "11",
+          "role": "cell",
+          "name": "",
+          "value": null,
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 7,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "row",
+              ""
+            ],
+            [
+              "rowgroup",
+              ""
+            ],
+            [
+              "table",
+              ""
+            ],
+            [
+              "cell",
+              ""
+            ],
+            [
+              "row",
+              ""
+            ]
+          ],
+          "name_source": "none"
+        },
+        {
+          "node_id": "12",
+          "role": "textbox",
+          "name": "Username",
+          "value": null,
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 8,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "cell",
+              ""
+            ],
+            [
+              "row",
+              ""
+            ],
+            [
+              "rowgroup",
+              ""
+            ],
+            [
+              "table",
+              ""
+            ],
+            [
+              "cell",
+              ""
+            ]
+          ],
+          "name_source": "row_label"
+        },
+        {
+          "node_id": "13",
+          "role": "row",
+          "name": "",
+          "value": null,
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 6,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "rowgroup",
+              ""
+            ],
+            [
+              "table",
+              ""
+            ],
+            [
+              "cell",
+              ""
+            ],
+            [
+              "row",
+              ""
+            ],
+            [
+              "rowgroup",
+              ""
+            ]
+          ],
+          "name_source": "none"
+        },
+        {
+          "node_id": "14",
+          "role": "cell",
+          "name": "Password",
+          "value": null,
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 7,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "row",
+              ""
+            ],
+            [
+              "rowgroup",
+              ""
+            ],
+            [
+              "table",
+              ""
+            ],
+            [
+              "cell",
+              ""
+            ],
+            [
+              "row",
+              ""
+            ]
+          ],
+          "name_source": "a11y"
+        },
+        {
+          "node_id": "15",
+          "role": "cell",
+          "name": "",
+          "value": null,
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 7,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "row",
+              ""
+            ],
+            [
+              "rowgroup",
+              ""
+            ],
+            [
+              "table",
+              ""
+            ],
+            [
+              "cell",
+              ""
+            ],
+            [
+              "row",
+              ""
+            ]
+          ],
+          "name_source": "none"
+        },
+        {
+          "node_id": "16",
+          "role": "textbox",
+          "name": "Password",
+          "value": null,
+          "states": [],
+          "bounds": [
+            578.0833740234375,
+            94.66667175292969,
+            170.0,
+            21.333328247070312
+          ],
+          "sensitivity": "secret",
+          "depth": 8,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "cell",
+              ""
+            ],
+            [
+              "row",
+              ""
+            ],
+            [
+              "rowgroup",
+              ""
+            ],
+            [
+              "table",
+              ""
+            ],
+            [
+              "cell",
+              ""
+            ]
+          ],
+          "name_source": "row_label"
+        },
+        {
+          "node_id": "17",
+          "role": "row",
+          "name": "",
+          "value": null,
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 6,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "rowgroup",
+              ""
+            ],
+            [
+              "table",
+              ""
+            ],
+            [
+              "cell",
+              ""
+            ],
+            [
+              "row",
+              ""
+            ],
+            [
+              "rowgroup",
+              ""
+            ]
+          ],
+          "name_source": "none"
+        },
+        {
+          "node_id": "18",
+          "role": "cell",
+          "name": "",
+          "value": null,
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 7,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "row",
+              ""
+            ],
+            [
+              "rowgroup",
+              ""
+            ],
+            [
+              "table",
+              ""
+            ],
+            [
+              "cell",
+              ""
+            ],
+            [
+              "row",
+              ""
+            ]
+          ],
+          "name_source": "none"
+        },
+        {
+          "node_id": "19",
+          "role": "button",
+          "name": "Login",
+          "value": null,
+          "states": [],
+          "bounds": null,
+          "sensitivity": "none",
+          "depth": 8,
+          "frame_path": [],
+          "ancestors": [
+            [
+              "cell",
+              ""
+            ],
+            [
+              "row",
+              ""
+            ],
+            [
+              "rowgroup",
+              ""
+            ],
+            [
+              "table",
+              ""
+            ],
+            [
+              "cell",
+              ""
+            ]
+          ],
+          "name_source": "a11y"
+        }
+      ],
+      "urls": [
+        "http://127.0.0.1:5055/login"
+      ]
+    },
+    "screenshot_path": "steps/001_escalation.png",
+    "context": {
+      "capability_id": "look-up-member-12345-and-read-their-current-savings-balance",
+      "step_index": "2",
+      "trigger_reason": "the observation shows the login form (a 'Login' button) mid-flow"
+    },
+    "created_at": "2026-08-18T19:17:20.939815+00:00",
+    "expires_at": "2026-08-18T19:32:20.939815+00:00"
+  },
+  "token": {
+    "state": "automation",
+    "holder": "runner",
+    "intervention_id": "escb4e73c2bb2",
+    "updated_at": "2026-08-18T19:18:21.061882+00:00"
+  },
+  "resolution": {
+    "resolved_by": "operator",
+    "action_taken": "took_control",
+    "human_actions": [
+      {
+        "kind": "click",
+        "role": "textbox",
+        "name": "f1",
+        "value": "",
+        "url": null,
+        "at": "2026-08-18T19:18:06.115Z"
+      },
+      {
+        "kind": "input",
+        "role": "textbox",
+        "name": "f1",
+        "value": "a",
+        "url": null,
+        "at": "2026-08-18T19:18:06.645Z"
+      },
+      {
+        "kind": "input",
+        "role": "textbox",
+        "name": "f1",
+        "value": "ad",
+        "url": null,
+        "at": "2026-08-18T19:18:06.820Z"
+      },
+      {
+        "kind": "input",
+        "role": "textbox",
+        "name": "f1",
+        "value": "adm",
+        "url": null,
+        "at": "2026-08-18T19:18:06.969Z"
+      },
+      {
+        "kind": "input",
+        "role": "textbox",
+        "name": "f1",
+        "value": "admi",
+        "url": null,
+        "at": "2026-08-18T19:18:07.189Z"
+      },
+      {
+        "kind": "input",
+        "role": "textbox",
+        "name": "f1",
+        "value": "admin",
+        "url": null,
+        "at": "2026-08-18T19:18:07.397Z"
+      },
+      {
+        "kind": "change",
+        "role": "textbox",
+        "name": "f1",
+        "value": "admin",
+        "url": null,
+        "at": "2026-08-18T19:18:07.676Z"
+      },
+      {
+        "kind": "input",
+        "role": "textbox",
+        "name": "f2",
+        "value": "h",
+        "url": null,
+        "at": "2026-08-18T19:18:08.290Z"
+      },
+      {
+        "kind": "input",
+        "role": "textbox",
+        "name": "f2",
+        "value": "hu",
+        "url": null,
+        "at": "2026-08-18T19:18:08.464Z"
+      },
+      {
+        "kind": "input",
+        "role": "textbox",
+        "name": "f2",
+        "value": "hun",
+        "url": null,
+        "at": "2026-08-18T19:18:08.723Z"
+      },
+      {
+        "kind": "input",
+        "role": "textbox",
+        "name": "f2",
+        "value": "hunt",
+        "url": null,
+        "at": "2026-08-18T19:18:09.059Z"
+      },
+      {
+        "kind": "input",
+        "role": "textbox",
+        "name": "f2",
+        "value": "hunte",
+        "url": null,
+        "at": "2026-08-18T19:18:09.287Z"
+      },
+      {
+        "kind": "input",
+        "role": "textbox",
+        "name": "f2",
+        "value": "hunter",
+        "url": null,
+        "at": "2026-08-18T19:18:09.471Z"
+      },
+      {
+        "kind": "input",
+        "role": "textbox",
+        "name": "f2",
+        "value": "hunter2",
+        "url": null,
+        "at": "2026-08-18T19:18:10.013Z"
+      },
+      {
+        "kind": "change",
+        "role": "textbox",
+        "name": "f2",
+        "value": "hunter2",
+        "url": null,
+        "at": "2026-08-18T19:18:12.441Z"
+      },
+      {
+        "kind": "click",
+        "role": "button",
+        "name": "",
+        "value": "Login",
+        "url": null,
+        "at": "2026-08-18T19:18:12.561Z"
+      },
+      {
+        "kind": "navigate",
+        "role": "",
+        "name": "",
+        "value": null,
+        "url": "http://127.0.0.1:5055/app",
+        "at": "2026-08-18T19:18:21.015Z"
+      },
+      {
+        "kind": "navigate",
+        "role": "",
+        "name": "",
+        "value": null,
+        "url": "http://127.0.0.1:5055/nav",
+        "at": "2026-08-18T19:18:21.042Z"
+      },
+      {
+        "kind": "navigate",
+        "role": "",
+        "name": "",
+        "value": null,
+        "url": "http://127.0.0.1:5055/members",
+        "at": "2026-08-18T19:18:21.044Z"
+      }
+    ],
+    "notes": "",
+    "resolved_at": "2026-08-18T19:18:19.754644+00:00"
+  },
+  "approval_consumed": false,
+  "transitions": [
+    {
+      "from_state": "automation",
+      "to_state": "pending_handoff",
+      "actor": "runner",
+      "reason": "escalating: session_expired",
+      "at": "2026-08-18T19:17:20.943816+00:00"
+    },
+    {
+      "from_state": "pending_handoff",
+      "to_state": "human",
+      "actor": "operator",
+      "reason": "operator took control",
+      "at": "2026-08-18T19:17:55.653092+00:00"
+    },
+    {
+      "from_state": "human",
+      "to_state": "pending_resume",
+      "actor": "operator",
+      "reason": "operator returned control",
+      "at": "2026-08-18T19:18:19.750646+00:00"
+    },
+    {
+      "from_state": "pending_resume",
+      "to_state": "automation",
+      "actor": "runner",
+      "reason": "resolved: took_control",
+      "at": "2026-08-18T19:18:21.061882+00:00"
+    }
+  ]
+}

@@ -22,6 +22,7 @@ Directory layout, under `<base_dir>/<run_kind>-<run_id>/`:
     run.jsonl         one RunEvent per line, append-only, monotonically increasing `seq`
     result.json       the final structured result
     steps/NNN_before.png, NNN_after.png    masked screenshots
+    steps/NNN_escalation.png               masked screenshot at escalation time (own counter)
     dom/NNN.html      redacted DOM snapshot, failure only
     a11y/NNN.json     redacted Observation snapshot, failure only
     trace.zip         Playwright trace, started at run open, kept ONLY on failure
@@ -113,6 +114,10 @@ class EvidenceLogger:
         self._seq = 0
         self._trace_started = False
         self._run_ended = False
+        # Its own counter, not a step id: an escalation is not tied to one step index in
+        # discovery, and two escalations at the same replay step id must not silently overwrite
+        # each other's screenshot file (see escalation_screenshot() below).
+        self._escalation_seq = 0
 
     # -------------------------------------------------------------------------------- run.jsonl
 
@@ -153,7 +158,7 @@ class EvidenceLogger:
         self,
         surface: Any,
         step_id: int,
-        when: Literal["before", "after"],
+        when: Literal["before", "after", "escalation"],
         observation: Observation | None = None,
     ) -> Path | None:
         """Mask, then write, or refuse and log why. A no-op returning None if `surface` has no
@@ -203,6 +208,20 @@ class EvidenceLogger:
         path = steps_dir / f"{step_id:03d}_{when}.png"
         path.write_bytes(masked)
         return path
+
+    def escalation_screenshot(self, surface: Any, observation: Observation) -> Path | None:
+        """A screenshot taken at escalation time, through the SAME `screenshot()` path above (mask
+        first, write once, or refuse and log why) -- never a second write path. Callers must pass
+        the SAME observation their `InterventionRequest` carries, never a fresh re-observe: the
+        request's `observation` and its screenshot have to describe the same moment, or the mask
+        (positioned from that observation's own element bounds) can land on pixels that no longer
+        show what it thinks they show (ARCHITECTURE.md decision 47 makes the identical argument
+        for the ordinary before/after step screenshots). Uses its own counter, not a step id,
+        because an escalation is not tied to one step index in discovery, and two escalations at
+        the same replay step must not overwrite each other's file.
+        """
+        self._escalation_seq += 1
+        return self.screenshot(surface, self._escalation_seq, "escalation", observation=observation)
 
     # ------------------------------------------------------------------------ failure evidence
 
