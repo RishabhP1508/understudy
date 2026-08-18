@@ -1,6 +1,6 @@
 {
   "schema_version": 2,
-  "version": 3,
+  "version": 2,
   "capability_id": "look-up-member-12345-and-read-their-current-savings-balance",
   "name": "get_member_savings_balance",
   "description": "Logs into the member portal, searches for a specific member by ID, and retrieves their current savings balance.",
@@ -24,7 +24,7 @@
       "type": "integer",
       "required": true,
       "description": "the value typed into 'Member ID'",
-      "example": 12345,
+      "example": "12345",
       "sensitivity": "none"
     }
   ],
@@ -32,7 +32,7 @@
     {
       "name": "savings_balance",
       "type": "string",
-      "description": "The numerical value of the member's current savings balance.",
+      "description": "The current monetary balance found in the member's savings account.",
       "source_step_id": "6"
     }
   ],
@@ -54,8 +54,7 @@
         },
         "dom_fallback": null,
         "confidence": 0.5,
-        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
-        "recorded_rank": null
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
       },
       "value": "admin",
       "precondition": null,
@@ -85,8 +84,7 @@
         },
         "dom_fallback": null,
         "confidence": 0.5,
-        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
-        "recorded_rank": null
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
       },
       "value": {
         "kind": "param_ref",
@@ -116,8 +114,7 @@
         "relational": null,
         "dom_fallback": null,
         "confidence": 0.9,
-        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
-        "recorded_rank": null
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
       },
       "value": null,
       "precondition": null,
@@ -149,8 +146,7 @@
         },
         "dom_fallback": null,
         "confidence": 0.65,
-        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
-        "recorded_rank": null
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
       },
       "value": {
         "kind": "param_ref",
@@ -185,8 +181,7 @@
         },
         "dom_fallback": null,
         "confidence": 0.95,
-        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
-        "recorded_rank": null
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
       },
       "value": null,
       "precondition": null,
@@ -205,8 +200,8 @@
       "action": "click",
       "target": {
         "role": "link",
-        "name": ":member_id.*",
-        "name_match": "regex",
+        "name": "12345 - Testuser Alpha",
+        "name_match": "exact",
         "scope": [],
         "frame_path": [
           "contentframe"
@@ -215,8 +210,7 @@
         "relational": null,
         "dom_fallback": null,
         "confidence": 0.9,
-        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM name generalized to a regex: the text around :member_id was this recording's own observed data (e.g. this record's own name), the recorder has no evidence it is stable across a different parameter value, and resolution requires a unique match, so an over-broad pattern fails loudly rather than silently resolving to the wrong element.",
-        "recorded_rank": null
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
       },
       "value": null,
       "precondition": null,
@@ -245,7 +239,7 @@
         ],
         "frame_path": [
           "contentframe",
-          "/member/:member_id/balance"
+          "/member/12345/balance"
         ],
         "ordinal": null,
         "relational": {
@@ -254,15 +248,14 @@
         },
         "dom_fallback": null,
         "confidence": 0.65,
-        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
-        "recorded_rank": null
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM"
       },
       "value": "savings_balance",
       "precondition": null,
       "postcondition": {
-        "kind": "element_present",
-        "target": "generic",
-        "value": "Savings Balance"
+        "kind": "text_present",
+        "target": "page",
+        "value": "$1,204.55"
       },
       "risk_class": "SAFE_REVERSIBLE",
       "rationale": "Extract the current savings balance for member 12345.",
@@ -270,9 +263,9 @@
     }
   ],
   "success": {
-    "kind": "element_present",
-    "target": "generic",
-    "value": "Savings Balance"
+    "kind": "text_present",
+    "target": "page",
+    "value": "$1,204.55"
   },
   "known_outcomes": [
     {
@@ -282,69 +275,40 @@
       "message_template": "No member found for the given id."
     },
     {
-      "code": "permission_denied",
-      "detector": "permission_denied",
+      "code": "insufficient_funds",
+      "detector": "balance_check",
       "terminal": true,
-      "message_template": "You do not have permission to view this record."
-    },
-    {
-      "code": "validation_rejected",
-      "detector": "validation_rejected",
-      "terminal": true,
-      "message_template": "The submitted value could not be validated."
+      "message_template": "The account does not have enough balance for this action."
     }
   ],
   "recovery_rules": [
     {
-      "id": "dismiss_native_dialog",
-      "trigger": "native_dialog_appeared",
-      "action": "dismiss_dialog",
-      "max_attempts": 3
-    },
-    {
-      "id": "dismiss_html_interstitial",
-      "trigger": "html_interstitial_present",
+      "id": "dismiss_unexpected_dialog",
+      "trigger": "a native confirm/alert/prompt dialog appears mid-flow",
       "action": "dismiss",
-      "max_attempts": 4
-    },
-    {
-      "id": "retry_transient_failure",
-      "trigger": "transient_error_page",
-      "action": "retry",
-      "max_attempts": 5
-    },
-    {
-      "id": "wait_for_slow_load",
-      "trigger": "navigation_still_in_flight",
-      "action": "wait",
-      "max_attempts": 3
+      "max_attempts": 1
     },
     {
       "id": "reauth_on_session_expiry",
-      "trigger": "session_lost_mid_flow",
+      "trigger": "the app redirects back to a login page mid-flow",
       "action": "reauth",
       "max_attempts": 1
+    },
+    {
+      "id": "wait_on_slow_load",
+      "trigger": "the target element has not appeared yet and the page is still loading",
+      "action": "wait",
+      "max_attempts": 3
     }
   ],
   "provenance": {
     "run_id": "b2405e162ba4",
     "model": "gemini-3.6-flash",
-    "timestamp": "2026-08-18T01:22:37.477512+00:00",
+    "timestamp": "2026-08-17T18:59:05.189651+00:00",
     "code_sha": null,
     "perception_version": 2,
     "transcript_hash": "c0fb251a4f094c8cdda1ce82f8d6133ff84b882d930c6330f8fa009d00e4eb10"
   },
-  "status": "approved",
-  "stability": {
-    "runs": 5,
-    "successes": 5,
-    "last_n_outcomes": [
-      "success",
-      "success",
-      "success",
-      "success",
-      "success"
-    ],
-    "computed_at": "2026-08-18T02:04:56.688645+00:00"
-  }
+  "status": "draft",
+  "stability": null
 }

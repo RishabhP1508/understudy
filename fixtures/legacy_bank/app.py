@@ -280,6 +280,14 @@ def member_balance(mid: str) -> Any:
 # ---------------------------------------------------------------------------------
 
 
+def _parse_money(value: Any) -> float | None:
+    """"$1,204.55" -> 1204.55; None if `value` does not parse as a number at all."""
+    try:
+        return float(str(value).replace("$", "").replace(",", ""))
+    except ValueError:
+        return None
+
+
 @app.route("/member/<mid>/subaccount/new", methods=["GET", "POST"])
 @require_login
 def subaccount_new(mid: str) -> Any:
@@ -300,6 +308,31 @@ def subaccount_new(mid: str) -> Any:
                     nickname=nickname,
                     deposit=deposit,
                     deposit_error="Deposit amount could not be validated. Please re-enter.",
+                ),
+                200,
+            )
+        # A real business rule, not injected failure: a deposit this member cannot cover. Skips
+        # entirely (behaves exactly as before) when the member has no balance on file or the
+        # submitted deposit does not parse as a number -- the "validation" branch above already
+        # covers a genuinely malformed deposit.
+        balance_amount = _parse_money(member.get("balance"))
+        deposit_amount = _parse_money(deposit)
+        if (
+            balance_amount is not None
+            and deposit_amount is not None
+            and deposit_amount > balance_amount
+        ):
+            return (
+                render_template(
+                    "subaccount_new.html",
+                    mid=mid,
+                    acct_type=acct_type,
+                    nickname=nickname,
+                    deposit=deposit,
+                    deposit_error=(
+                        f"Insufficient funds: the initial deposit exceeds the available "
+                        f"balance of {member.get('balance')}."
+                    ),
                 ),
                 200,
             )

@@ -114,12 +114,19 @@ _EXISTING_PII_REF_RE = re.compile(r"^\$\{pii:([a-z0-9\-]+)\}$")
 # which only makes sense when there IS a login prefix to re-run (`login_prefix_len` > 0). The first
 # four rules below are therefore seeded unconditionally; only `reauth_on_session_expiry` is gated.
 #
-# `insufficient_funds` (detector `balance_check`) is DROPPED entirely, not merely gated: no flow in
-# this project ever earns it, and B1 (replay/outcomes.py) defines only three real detectors
-# (member_lookup_no_match, permission_denied, validation_rejected) -- a `balance_check` detector
-# does not exist. A seed whose detector name does not resolve would fail outcomes.validate() the
-# moment ANY capability ever emitted it, so keeping the seed around unused would be a landmine, not
-# a convenience. This is a deliberate deletion, not an oversight.
+# `insufficient_funds` (detector `balance_check`) is seeded on the same PRODUCE axis as the other
+# three, not dropped: `_earns_insufficient_funds` earns it when a flow types into a field whose
+# name reads as monetary ("deposit", "amount", "transfer") and later submits it with a click -- the
+# same "typed input that gets submitted" shape as `validation_rejected`, narrowed to a field that
+# actually spends value. A read-only lookup still cannot earn it, for the same reason it cannot
+# earn `validation_rejected`: it never types into anything. Phase 9 dropped this seed entirely
+# rather than merely gating it, on the reasoning that no flow in the project could ever reach it
+# and B1 (replay/outcomes.py) defined no `balance_check` detector for it to name -- correct at the
+# time; a seed whose detector name does not resolve fails outcomes.validate() the moment any
+# capability emits it, so an unused seed would have been a landmine. Phase 10 then recorded a real
+# subaccount-opening capability whose flow types an amount into "Initial Deposit" and submits it --
+# a flow that spends value and can be told "no" -- so Phase 11 wrote the detector, made the fixture
+# (fixtures/legacy_bank/app.py) able to say no, and reinstated the seed. See docs/adr/0016.
 _RECOVERY_RULE_SEEDS: tuple[RecoveryRule, ...] = (
     RecoveryRule(
         id="dismiss_native_dialog",
@@ -180,6 +187,23 @@ def _earns_validation_rejected(steps: list[Step]) -> bool:
     return False
 
 
+def _earns_insufficient_funds(steps: list[Step]) -> bool:
+    """`insufficient_funds` can only ever fire on a flow that actually SPENDS value -- earned when
+    a `type` step's target name, lowercased, reads as a monetary field ("deposit", "amount", or
+    "transfer") and a later (not necessarily immediate) `click` step submits it. Mirrors
+    `_earns_validation_rejected`'s shape: typed input that is never submitted cannot be rejected by
+    the app at all, whether the rejection is a validation error or an insufficient-funds one."""
+    saw_money_field = False
+    for step in steps:
+        if step.action == "type" and step.target is not None:
+            name = step.target.name.lower()
+            if "deposit" in name or "amount" in name or "transfer" in name:
+                saw_money_field = True
+        elif step.action == "click" and saw_money_field:
+            return True
+    return False
+
+
 def _recorded_urls(steps: list[Step], success: Checkpoint) -> list[str]:
     """Every URL this recording actually touched, as far as the built Steps/Checkpoints can say:
     each step's own `url_matches` postcondition value, plus the success checkpoint's, if it is one
@@ -222,6 +246,15 @@ def _seed_known_outcomes(steps: list[Step], recorded_urls: list[str]) -> list[Kn
                 detector="validation_rejected",
                 terminal=True,
                 message_template="The submitted value could not be validated.",
+            )
+        )
+    if _earns_insufficient_funds(steps):
+        outcomes.append(
+            KnownOutcome(
+                code="insufficient_funds",
+                detector="balance_check",
+                terminal=True,
+                message_template="The submitted deposit exceeds the available balance.",
             )
         )
     return outcomes
