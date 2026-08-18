@@ -64,6 +64,12 @@ class TargetDescriptor(BaseModel):
     )  # CSS; explicitly brittle, attempted last, never fabricated
     confidence: float = 0.0
     notes: str = ""
+    # STRUCTURAL: the 1-based rank (ResolutionStrategy walk order) of the strategy that resolved
+    # this descriptor against the very observation it was captured from -- describe()'s own honest
+    # self-check, computed by immediately resolving what it just built. None means "recorded
+    # before this field existed" (every artifact already on disk); replay compares its own
+    # actual_rank against this via drift_delta() as a signal, never a gate.
+    recorded_rank: int | None = Field(default=None, json_schema_extra=STRUCTURAL_EXTRA)
 
     @field_serializer("confidence")
     def _round_confidence(self, value: float) -> float:
@@ -474,7 +480,7 @@ def describe(element: UIElement, observation: Observation) -> TargetDescriptor:
         confidence += 0.05
     confidence = max(0.0, min(1.0, confidence))
 
-    return TargetDescriptor(
+    descriptor = TargetDescriptor(
         role=element.role,
         name=element.name,
         name_match="exact",
@@ -486,6 +492,11 @@ def describe(element: UIElement, observation: Observation) -> TargetDescriptor:
         confidence=confidence,
         notes="no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
     )
+    # The only honest source for recorded_rank: resolve() is pure and cheap, and this is exactly
+    # the same observation the descriptor was just captured from, so the rank it reports is what
+    # replay is meant to reproduce later, not a guess.
+    resolution = resolve(descriptor, observation)
+    return descriptor.model_copy(update={"recorded_rank": resolution.rank})
 
 
 def drift_delta(recorded_rank: int, actual_rank: int) -> int:

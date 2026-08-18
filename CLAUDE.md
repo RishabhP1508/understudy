@@ -255,6 +255,12 @@ never be silent: it prints a reason naming the phase that will enable it.
 - All config via environment variables and policy YAML; never hardcode secrets; use a gitignored .env
   and document required vars in .env.example.
 - No fixed sleeps anywhere in src/understudy/replay/. Explicit waits on conditions only.
+- An inert mechanism that reports success for work it did not do is a CORRECTNESS bug in this
+  project, never a cleanup item. Phase 5's policy test validated a rule the system never applied,
+  Phase 7's route check never fired against the real app, and Phase 9's getattr degrade branches
+  would have written a fabricated recovered event. Each looked like tidy defensive code.
+- A schema field whose only reader is a dead branch gets WIRED or CUT, never resolved by deleting
+  the branch and leaving the field unreachable. message_template was write-only until Phase 9.
 
 ## Repository layout (put every file exactly here)
 Do NOT create new top-level folders or invent alternate file names. When a phase needs a new file,

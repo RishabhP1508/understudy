@@ -31,7 +31,7 @@ from pydantic import BaseModel, Field
 
 
 class FailureCategory(StrEnum):
-    """Eleven values. Three of the first ten exist because a single message,
+    """Twelve values. Three of the first ten exist because a single message,
     "could not resolve the target for step 0", was measured (Phase 3) coming from two
     unrelated causes -- a dead fixture server and a stale artifact -- and a caller cannot act on
     a failure it cannot tell apart. See docs/adr/0009 for the full reasoning and the classifier.
@@ -43,8 +43,13 @@ class FailureCategory(StrEnum):
       itself has genuinely changed or the recorded descriptor was always ambiguous.
     - POLICY_DENIED: the policy gate refused a step (allowlist, action type, role, forbidden
       text, or risk) that the recorded capability itself proposed.
-    - ACTION_FAILED: the surface raised executing an otherwise-permitted action (an "outright
-      app error" in R3's list, or any runtime condition not covered by a more specific category).
+    - ACTION_FAILED: the SURFACE RAISED while executing an otherwise-permitted action -- a
+      Playwright timeout, a stale ref, a crashed page -- any runtime condition where the action
+      itself never completed. Distinct from APP_ERROR, below: this is Understudy's own execution
+      failing, not the target application's.
+    - APP_ERROR: the action executed fine and the APPLICATION returned an error (an "outright
+      app error" in R3's list, e.g. an HTTP 500 or an error page) -- the surface did its job, and
+      what it observed afterward is the failure.
     - POSTCONDITION_FAILED: a step's own recorded postcondition did not hold afterwards.
     - CHECKPOINT_NOT_VERIFIED: every step executed, but the capability's success checkpoint did
       not hold in the final observation.
@@ -72,6 +77,7 @@ class FailureCategory(StrEnum):
     LOCATOR_UNRESOLVED = "locator_unresolved"
     POLICY_DENIED = "policy_denied"
     ACTION_FAILED = "action_failed"
+    APP_ERROR = "app_error"
     POSTCONDITION_FAILED = "postcondition_failed"
     CHECKPOINT_NOT_VERIFIED = "checkpoint_not_verified"
     PERMISSION_DENIED = "permission_denied"
@@ -89,14 +95,25 @@ class Success(BaseModel):
 
 class BusinessOutcome(BaseModel):
     """A legitimate, typed answer the caller needs -- "no such member", "insufficient funds" --
-    never a failure (ARCHITECTURE.md decision 8). Not produced anywhere yet: the detectors that
-    recognize one are Phase 9's `replay/outcomes.py`. The shape exists now so the result contract
-    is complete and reviewable as a whole (R2), the way the brief grades it.
+    never a failure (ARCHITECTURE.md decision 8).
+
+    Three fields, deliberately split, mirroring `HardFailure`'s existing `expected`/`observed`
+    split rather than inventing a second shape:
+      - `code`: what a caller BRANCHES ON. Stable across tenants and vendor rewording.
+      - `message`: the CAPABILITY's OWN DECLARED MEANING (`KnownOutcome.message_template`) -- a
+        human or a calling agent can read this straight off the artifact before the capability
+        has ever been invoked (R2: reviewable by both), and it is the caller's actual contract.
+      - `observed`: what the APPLICATION ITSELF said, verbatim -- supporting evidence, not the
+        contract. Phase 12 puts two tenants of the same vendor product behind one capability, and
+        they will render different literal strings for the same outcome; a caller's `message`
+        changing per tenant, or when a vendor rewords a page, is exactly the drift the artifact
+        exists to absorb, so the literal text must never be the caller-facing field.
     """
 
     kind: Literal["business_outcome"] = "business_outcome"
     code: str
     message: str
+    observed: str = ""
     outputs: dict[str, Any] = Field(default_factory=dict)
 
 

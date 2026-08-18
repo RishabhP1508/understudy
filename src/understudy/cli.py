@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -15,8 +16,11 @@ from understudy.agent.loop import RunOutcome, run
 from understudy.config import load_settings
 from understudy.evidence.logger import EvidenceLogger
 from understudy.llm.base import LLMClient, build_llm
+from understudy.models.artifact import Capability, StabilitySignal
+from understudy.models.result import FailureCategory, ReplayResult
 from understudy.record.recorder import build_capability
 from understudy.replay import engine as replay_engine
+from understudy.replay.outcomes import UnknownDetector
 from understudy.safety.policy import (
     EscalationRequired,
     NavigationBlocked,
@@ -115,7 +119,7 @@ def _discover_and_capture(
             status, reason = "policy_stopped", _policy_exception_message(exc)
         else:
             status, reason = "error", str(exc)
-        logger.event("run_end", status=status, error=type(exc).__name__, reason=reason)
+        logger.run_end(status=status, error=type(exc).__name__, reason=reason)
         _write_error_result(logger, exc)
         raise
 
@@ -254,14 +258,143 @@ def replay(
     evidence_dir: Annotated[
         Path, typer.Option("--evidence-dir", help="base directory for run evidence")
     ] = Path("evidence"),
+    repeat: Annotated[
+        int,
+        typer.Option(
+            "--repeat",
+            help=(
+                "run replay this many times; N>1 writes a read-only StabilitySignal into the "
+                "artifact (never a gate) and the exit code follows the LAST run's result"
+            ),
+        ),
+    ] = 1,
 ) -> None:
+    """Exit codes: 0 for success AND for a business outcome (a legitimate answer, never a
+    failure); 1 for a hard failure; 2 for a caller error -- an INVALID_PARAMS hard failure, or an
+    UnknownDetector escaping replay() (a broken artifact naming a detector/trigger this build does
+    not know, which is a request that was never valid, not a run that failed).
+    """
     parsed_params = json.loads(params)
-    result = replay_engine.replay(
-        artifact, parsed_params, policy, allow_risky=allow_risky, evidence_base_dir=evidence_dir
-    )
+    result: ReplayResult | None = None
+    outcomes_seen: list[str] = []
+    successes = 0
+    try:
+        for _run_index in range(repeat):
+            result = replay_engine.replay(
+                artifact,
+                parsed_params,
+                policy,
+                allow_risky=allow_risky,
+                evidence_base_dir=evidence_dir,
+            )
+            outcomes_seen.append(result.kind)
+            if result.kind in ("success", "business_outcome"):
+                successes += 1
+    except UnknownDetector as exc:
+        typer.echo(f"invalid artifact: {exc}")
+        raise typer.Exit(2) from None
+    assert result is not None  # repeat >= 1: the loop above always runs at least once
+
+    if repeat > 1:
+        # A read-only OBSERVATION of replay reliability, never a gate (models/artifact.py's
+        # StabilitySignal docstring) -- rewritten through the one serialization path, never a
+        # bare json.dump.
+        capability = Capability.model_validate_json(artifact.read_text(encoding="utf-8"))
+        stability = StabilitySignal(
+            runs=repeat,
+            successes=successes,
+            last_n_outcomes=outcomes_seen,
+            computed_at=datetime.now(UTC).isoformat(),
+        )
+        capability = capability.model_copy(update={"stability": stability})
+        artifact.write_text(Redactor().dumps(capability, indent=2), encoding="utf-8")
+        typer.echo(f"stability: {stability.model_dump_json()}")
+
+    if result.kind == "business_outcome":
+        # Printed clearly, on its own lines, above the JSON -- a human reading the terminal must
+        # never mistake a legitimate business answer for a failure.
+        typer.echo("BUSINESS OUTCOME (not a failure):")
+        typer.echo(f"  code: {result.code}")
+        typer.echo(f"  message: {result.message}")
+        typer.echo(f"  observed: {result.observed}")
+
     typer.echo(Redactor().dumps(result, indent=2))
+
     if result.kind == "hard_failure":
+        if result.category == FailureCategory.INVALID_PARAMS:
+            raise typer.Exit(2)
         raise typer.Exit(1)
+
+
+@app.command()
+def record(
+    run_dir: Annotated[
+        Path,
+        typer.Option(
+            "--run-dir",
+            help="an already-recorded evidence run directory, e.g. evidence/discovery-XXXX",
+        ),
+    ],
+    policy: Annotated[
+        Path, typer.Option("--policy", help="path to the policy YAML")
+    ] = Path("policies/legacy_bank.yaml"),
+) -> None:
+    """Rebuild a Capability from an ALREADY-RECORDED evidence run directory.
+
+    record/recorder.py's `build_capability` is a separate pass over a written run.jsonl by
+    design -- it never depends on the discovery process still being in memory. So when the
+    recorder itself gets better (a smarter postcondition rule, a parameterization fix), the
+    honest way to get a better artifact out of a GENUINE discovery run is to re-run this pass
+    over that run's real evidence, never to hand-edit the artifact file directly (evidence and
+    artifacts are produced, never authored), and never to burn a fresh live model run that would
+    also change the very flow being compared against the last one.
+    """
+    events_path = run_dir / "run.jsonl"
+    if not events_path.exists():
+        typer.echo(f"no run.jsonl under {run_dir}")
+        raise typer.Exit(2)
+    raw = events_path.read_text(encoding="utf-8")
+    events = [json.loads(line) for line in raw.splitlines() if line.strip()]
+    run_start = next((e for e in events if e.get("type") == "run_start"), None)
+    if run_start is None:
+        typer.echo(f"{events_path} has no run_start event; cannot recover goal/target/run_id")
+        raise typer.Exit(2)
+    goal = run_start.get("goal")
+    target = run_start.get("target")
+    run_id = run_start.get("run_id")
+    model_name = run_start.get("model") or "unknown-model"
+    if not goal or not target or not run_id:
+        typer.echo(f"{events_path}'s run_start event is missing goal/target/run_id")
+        raise typer.Exit(2)
+
+    policy_obj = load_policy(policy)
+    settings = load_settings(policy)
+    llm: LLMClient | None
+    try:
+        llm = build_llm(settings)
+    except ValueError:
+        # The recorder degrades gracefully with no LLMClient (D5), exactly like `discover` does
+        # when GEMINI_API_KEY is unset -- re-recording a real run must not require a live key.
+        llm = None
+
+    slug = _slugify(goal)
+    capability = build_capability(
+        run_dir=run_dir,
+        goal=goal,
+        target=target,
+        run_id=run_id,
+        model=model_name,
+        capability_id=slug,
+        policy=policy_obj,
+        llm=llm,
+    )
+    artifacts_dir = Path("artifacts")
+    artifacts_dir.mkdir(exist_ok=True)
+    version = _next_artifact_version(artifacts_dir, slug)
+    capability = capability.model_copy(update={"version": version})
+    artifact_path = artifacts_dir / f"{slug}.v{version}.json"
+    artifact_path.write_text(Redactor().dumps(capability, indent=2), encoding="utf-8")
+    typer.echo(f"artifact written: {artifact_path}")
 
 
 @app.command()

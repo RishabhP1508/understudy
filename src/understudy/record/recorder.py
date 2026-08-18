@@ -15,24 +15,37 @@ pass has several stages, in order:
    compare. This falls back to the sorted set of currently-loaded URLs
    (`policy_decision.checked_urls`) as a coarser stand-in state signature.
 3. Merge consecutive redundant navigations (the later one supersedes the earlier).
-4. Build each Step's TargetDescriptor. `locator.describe()` is the general mechanism, but it needs
+4. Generalize the success checkpoint (`_generalize_success_checkpoint`, Phase 9) BEFORE
+   postconditions are derived, because the last step's postcondition IS the success checkpoint
+   (see stage 5): a `text_present` checkpoint whose value is exactly what an `extract` step in
+   this same run produced is asserting THIS INVOCATION's OWN OUTPUT (member 12345's real balance),
+   never a property any other invocation can be expected to reproduce, so it is rewritten to
+   assert only that the extract step's own recorded role+name is present, with the invocation's
+   data removed.
+5. Build each Step's TargetDescriptor. `locator.describe()` is the general mechanism, but it needs
    a live Observation to run against, and this log carries none (a11y/ snapshots are written on
    FAILURE only) -- so the descriptor actually used is the one `describe()` ALREADY computed live,
    at discovery time (agent/loop.py), and serialized into the event's own `context.target`. This
    recorder parses that, rather than recomputing it; "the resolution rank achieved at record time"
    cannot be independently verified from this log format, for the same reason.
-5. Derive each step's postcondition (see `_derive_postcondition`).
-6. Promote each event's `rationale` into that step's rationale VERBATIM -- never regenerated,
+6. Derive each step's postcondition (see `_derive_postcondition`).
+7. Promote each event's `rationale` into that step's rationale VERBATIM -- never regenerated,
    paraphrased, or tidied. It is the model's own stated reason, and it is what replay logs cite
    when no model is present.
-7. Canonicalize routes and parameterize values (record/canonicalize.py) against the goal text.
-8. Seed `known_outcomes`/`recovery_rules` from a starter library, plus anything this run itself
-   observed.
-9. One OPTIONAL, structured model call for name, description, and output descriptions (D5):
-   degrades to a deterministic name/description derived from the goal string with no network at
-   all if no LLMClient is given, the call raises, or its answer names an output no step extracts
-   (rejected and retried once).
-10. Compute `transcript_hash` from the run's own `transcript.jsonl` (the actual raw model
+8. Canonicalize routes and parameterize values (record/canonicalize.py) against the goal text.
+9. Generalize a descriptor's own NAME and `frame_path` segments (`_parameterize_names_and_frames`,
+   Phase 9) using the identical value->param map stage 8 already built: a goal literal can leak
+   into an element's own accessible name (a member list row's link text embeds that member's own
+   name, e.g. "12345 - Testuser Alpha") or into a frame's URL-shaped path segment, neither of which
+   stage 8's route/value canonicalization reaches (those rewrite Checkpoint URLs and Step values,
+   not a TargetDescriptor's own fields).
+10. Seed `known_outcomes`/`recovery_rules`, each GATED rather than applied wholesale (Phase 9):
+    see `_seed_known_outcomes`/`_seed_recovery_rules` for the two different gating axes.
+11. One OPTIONAL, structured model call for name, description, and output descriptions (D5):
+    degrades to a deterministic name/description derived from the goal string with no network at
+    all if no LLMClient is given, the call raises, or its answer names an output no step extracts
+    (rejected and retried once).
+12. Compute `transcript_hash` from the run's own `transcript.jsonl` (the actual raw model
     transcript this project promises never to store) -- never `run.jsonl`, which is the recorded
     EVENT log, a different file with a different purpose. `stability` stays None; Phase 9's own
     five-run replay check is what writes it.
@@ -46,6 +59,7 @@ import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from understudy.llm.base import LLMClient
 from understudy.models.artifact import (
@@ -59,6 +73,7 @@ from understudy.models.artifact import (
     RecoveryRule,
     Step,
     TargetApp,
+    login_prefix_len,
 )
 from understudy.models.observation import PERCEPTION_VERSION
 from understudy.record.canonicalize import (
@@ -80,41 +95,150 @@ from understudy.surface.locator import TargetDescriptor
 _EXISTING_SECRET_REF_RE = re.compile(r"^\$\{param:([a-z0-9\-]+)\}$")
 _EXISTING_PII_REF_RE = re.compile(r"^\$\{pii:([a-z0-9\-]+)\}$")
 
-_KNOWN_OUTCOME_LIBRARY: tuple[KnownOutcome, ...] = (
-    KnownOutcome(
-        code="member_not_found",
-        detector="member_lookup_no_match",
-        terminal=True,
-        message_template="No member found for the given id.",
-    ),
-    KnownOutcome(
-        code="insufficient_funds",
-        detector="balance_check",
-        terminal=True,
-        message_template="The account does not have enough balance for this action.",
-    ),
-)
-
-_RECOVERY_RULE_LIBRARY: tuple[RecoveryRule, ...] = (
+# Seeding known_outcomes and recovery_rules is gated, not applied wholesale -- on two DIFFERENT
+# axes, because they answer two different questions:
+#
+# A KNOWN OUTCOME is gated on WHAT THE FLOW CAN PRODUCE. Before this gating, every capability
+# recorded declared `insufficient_funds` -- an outcome a read-only balance lookup can never
+# possibly produce, a false contract in exactly the file the brief treats as a focal point, and a
+# dead detector sitting in replay's hot path. `_seed_known_outcomes` below only adds an outcome
+# when the recorded flow itself gives evidence it is reachable (a lookup control, a protected
+# record's URL, typed input that gets submitted).
+#
+# A RECOVERY RULE is gated on WHETHER REPLAY CAN ACTUALLY PERFORM IT for this flow. A slow load, an
+# unexpected dialog, or a transient 503 can happen to ANY flow regardless of what this particular
+# recording did -- gating those on "did this run hit one" would strip every recovery rule from
+# every clean recording, which is the opposite of useful (recovery rules exist precisely for
+# conditions THIS run did not happen to hit). What genuinely CAN be absent is the ABILITY to
+# recover: `reauth` means "re-navigate to the entry point and re-run the recorded login steps",
+# which only makes sense when there IS a login prefix to re-run (`login_prefix_len` > 0). The first
+# four rules below are therefore seeded unconditionally; only `reauth_on_session_expiry` is gated.
+#
+# `insufficient_funds` (detector `balance_check`) is DROPPED entirely, not merely gated: no flow in
+# this project ever earns it, and B1 (replay/outcomes.py) defines only three real detectors
+# (member_lookup_no_match, permission_denied, validation_rejected) -- a `balance_check` detector
+# does not exist. A seed whose detector name does not resolve would fail outcomes.validate() the
+# moment ANY capability ever emitted it, so keeping the seed around unused would be a landmine, not
+# a convenience. This is a deliberate deletion, not an oversight.
+_RECOVERY_RULE_SEEDS: tuple[RecoveryRule, ...] = (
     RecoveryRule(
-        id="dismiss_unexpected_dialog",
-        trigger="a native confirm/alert/prompt dialog appears mid-flow",
+        id="dismiss_native_dialog",
+        trigger="native_dialog_appeared",
+        action="dismiss_dialog",
+        max_attempts=3,
+    ),
+    RecoveryRule(
+        id="dismiss_html_interstitial",
+        trigger="html_interstitial_present",
         action="dismiss",
-        max_attempts=1,
+        max_attempts=4,
     ),
     RecoveryRule(
-        id="reauth_on_session_expiry",
-        trigger="the app redirects back to a login page mid-flow",
-        action="reauth",
-        max_attempts=1,
+        id="retry_transient_failure",
+        trigger="transient_error_page",
+        action="retry",
+        max_attempts=5,
     ),
     RecoveryRule(
-        id="wait_on_slow_load",
-        trigger="the target element has not appeared yet and the page is still loading",
+        id="wait_for_slow_load",
+        trigger="navigation_still_in_flight",
         action="wait",
         max_attempts=3,
     ),
 )
+
+
+def _earns_member_not_found(steps: list[Step]) -> bool:
+    """`member_not_found` can only ever fire on a flow that actually performs a record lookup --
+    earned when some step's target name looks like a lookup field or control (case-insensitive
+    "member id" or "search")."""
+    for step in steps:
+        if step.target is None:
+            continue
+        name = step.target.name.lower()
+        if "member id" in name or "search" in name:
+            return True
+    return False
+
+
+def _earns_permission_denied(recorded_urls: list[str]) -> bool:
+    """`permission_denied` can only ever fire on a flow that opens a protected record -- earned
+    when a recorded URL's path contains "/member/" (the fixture's 403 is only ever returned by
+    /member/<id> and /member/<id>/balance)."""
+    return any("/member/" in urlsplit(url).path for url in recorded_urls)
+
+
+def _earns_validation_rejected(steps: list[Step]) -> bool:
+    """`validation_rejected` can only ever fire on a flow that submits typed input -- earned when a
+    `type` step is followed, later (not necessarily immediately), by a `click` step."""
+    saw_type = False
+    for step in steps:
+        if step.action == "type":
+            saw_type = True
+        elif step.action == "click" and saw_type:
+            return True
+    return False
+
+
+def _recorded_urls(steps: list[Step], success: Checkpoint) -> list[str]:
+    """Every URL this recording actually touched, as far as the built Steps/Checkpoints can say:
+    each step's own `url_matches` postcondition value, plus the success checkpoint's, if it is one
+    too. Used only to decide which known_outcomes are earned (`_earns_permission_denied`), never
+    serialized itself."""
+    urls = [
+        step.postcondition.value
+        for step in steps
+        if step.postcondition is not None and step.postcondition.kind == "url_matches"
+    ]
+    if success.kind == "url_matches":
+        urls.append(success.value)
+    return urls
+
+
+def _seed_known_outcomes(steps: list[Step], recorded_urls: list[str]) -> list[KnownOutcome]:
+    outcomes: list[KnownOutcome] = []
+    if _earns_member_not_found(steps):
+        outcomes.append(
+            KnownOutcome(
+                code="member_not_found",
+                detector="member_lookup_no_match",
+                terminal=True,
+                message_template="No member found for the given id.",
+            )
+        )
+    if _earns_permission_denied(recorded_urls):
+        outcomes.append(
+            KnownOutcome(
+                code="permission_denied",
+                detector="permission_denied",
+                terminal=True,
+                message_template="You do not have permission to view this record.",
+            )
+        )
+    if _earns_validation_rejected(steps):
+        outcomes.append(
+            KnownOutcome(
+                code="validation_rejected",
+                detector="validation_rejected",
+                terminal=True,
+                message_template="The submitted value could not be validated.",
+            )
+        )
+    return outcomes
+
+
+def _seed_recovery_rules(steps: list[Step], target: str) -> list[RecoveryRule]:
+    rules = list(_RECOVERY_RULE_SEEDS)
+    if login_prefix_len(steps, target) > 0:
+        rules.append(
+            RecoveryRule(
+                id="reauth_on_session_expiry",
+                trigger="session_lost_mid_flow",
+                action="reauth",
+                max_attempts=1,
+            )
+        )
+    return rules
 
 _METADATA_SYSTEM_PROMPT = (
     "You name and describe an already-recorded, already-successful browser automation "
@@ -242,7 +366,49 @@ def _merge_consecutive_navigations(events: list[dict[str, Any]]) -> list[dict[st
 
 
 # --------------------------------------------------------------------------------------
-# stage 4-6: build Steps
+# stage 4: generalize the success checkpoint, if it is really this run's own output (Phase 9)
+# --------------------------------------------------------------------------------------
+
+
+def _generalize_success_checkpoint(
+    success_checkpoint: Checkpoint, act_events: list[dict[str, Any]]
+) -> Checkpoint:
+    """The recorded success checkpoint is the model's own `finish` checkpoint -- often literally
+    `text_present("$1,204.55")`, member 12345's real balance from THIS run. Replaying with a
+    different member's id resolves every locator correctly and still fails this checkpoint, because
+    it is asserting THIS INVOCATION's OWN OUTPUT, not a property the capability's CONTRACT actually
+    makes -- the same defect class as a literal leaking into a route or a descriptor name, arriving
+    through a third door.
+
+    Fix: if the checkpoint is `text_present` and its value equals the `act_result` of some
+    `extract` act event in this run, it is asserting exactly what that extract step already
+    extracted. Replace it with `element_present` against THAT step's own recorded target
+    role+name -- the same assertion ("the thing this capability looks up is present"), with the
+    invocation-specific data removed. If no extract step produced that value, the checkpoint is
+    left untouched: it is already invocation-independent (e.g. a fixed confirmation banner).
+
+    Runs BEFORE `_attach_postconditions` (not after): the LAST step's postcondition IS this
+    checkpoint (`_derive_postcondition`'s branch (c)), so generalizing it here, first, generalizes
+    that postcondition too, in one place, rather than needing a second fix after the fact.
+    """
+    if success_checkpoint.kind != "text_present":
+        return success_checkpoint
+    for event in act_events:
+        context = event.get("context") or {}
+        if context.get("tool") != "extract":
+            continue
+        if (event.get("act_result") or "") == success_checkpoint.value:
+            target = context.get("target") or {}
+            return Checkpoint(
+                kind="element_present",
+                target=target.get("role", ""),
+                value=target.get("name", ""),
+            )
+    return success_checkpoint
+
+
+# --------------------------------------------------------------------------------------
+# stages 5 and 7: build Steps (TargetDescriptor; rationale is promoted verbatim inline below)
 # --------------------------------------------------------------------------------------
 
 
@@ -302,7 +468,7 @@ def _build_steps(act_events: list[dict[str, Any]]) -> tuple[list[Step], list[Out
 
 
 # --------------------------------------------------------------------------------------
-# stage 5: postcondition derivation (D1)
+# stage 6: postcondition derivation (D1)
 # --------------------------------------------------------------------------------------
 
 
@@ -375,8 +541,20 @@ def _attach_postconditions(
 
 
 # --------------------------------------------------------------------------------------
-# stage 7: canonicalize and parameterize
+# stage 8: canonicalize and parameterize
 # --------------------------------------------------------------------------------------
+
+
+def _typed_example(value: str, declared_type: str) -> str | int | float:
+    """`InputParam.example` must agree with `InputParam.type`: an `example="12345"` (a str)
+    alongside `type="integer"` contradicts its own declared type, which is exactly the contract
+    Phase 11's `json_schema()` export hands to a calling agent. Cast the observed literal to match
+    what `infer_type` already decided it is."""
+    if declared_type == "integer":
+        return int(value)
+    if declared_type == "number":
+        return float(value)
+    return value
 
 
 def _parameterize(
@@ -451,7 +629,11 @@ def _parameterize(
                     # observed literal as its example -- omitted, not stored as a shape hint,
                     # since a shape hint is more code than this project's own recorder needs
                     # to justify for a field no goal literal path has produced sensitively yet.
-                    example=value if sensitivity == "none" else None,
+                    # B7: cast to match `infer_type(value)` -- an integer/number param's example
+                    # must not be a bare str, which contradicts its own declared type.
+                    example=(
+                        _typed_example(value, infer_type(value)) if sensitivity == "none" else None
+                    ),
                     sensitivity=sensitivity,
                 )
             value_to_param[value] = param_name
@@ -486,7 +668,109 @@ def _canonicalize_steps(steps: list[Step], value_to_param: dict[str, str]) -> li
 
 
 # --------------------------------------------------------------------------------------
-# stage 9: the one optional structured model call (D5)
+# stage 9: a descriptor's own name and frame_path can ALSO embed a goal literal (Phase 9)
+# --------------------------------------------------------------------------------------
+
+
+def _regexify_name(name: str, literal: str, param_name: str) -> str:
+    """Split `name` on every occurrence of `literal`; the parameter placeholder is anchored where
+    the literal was, and every OTHER run of recorded text -- a leading, trailing, or in-between
+    chunk -- becomes `.*`, never kept as literal text to match against. The recorder has no
+    evidence that surrounding text is stable across a different parameter value (it is this
+    recording's own observed data, e.g. a member's name attached to a member-list row), and
+    resolution requires a UNIQUE match, so an over-broad pattern fails loudly rather than silently
+    clicking the wrong row. "12345 - Testuser Alpha" with literal "12345" -> ":member_id.*".
+    """
+    segments = name.split(literal)
+    pieces: list[str] = []
+    for index, segment in enumerate(segments):
+        if segment:
+            pieces.append(".*")
+        if index < len(segments) - 1:
+            pieces.append(f":{param_name}")
+    return "".join(pieces)
+
+
+def _parameterize_target(
+    target: TargetDescriptor, value_to_param: dict[str, str]
+) -> TargetDescriptor:
+    """Rewrite ONE descriptor's `frame_path` segments and `name`, using the SAME value->param map
+    `_parameterize` already built -- see this module's stage-9 docstring for why both leak a goal
+    literal that route/value canonicalization does not reach.
+
+    (a) frame_path: each segment goes through the EXISTING `canonicalize_route` (never a second
+        rewriter). A segment can be a bare frame name ("contentframe", untouched, no literal to
+        replace) or a frame's own URL PATH ("/member/12345/balance") -- `canonicalize_route` treats
+        either correctly since it only ever replaces a WHOLE path segment.
+    (b) name: when a goal literal appears INSIDE the name, either the name IS exactly the literal
+        (becomes ":param_name", `name_match` stays "exact") or the literal is EMBEDDED (becomes a
+        regex via `_regexify_name`, `name_match` becomes "regex", and `notes` records why -- R2's
+        robustness reasoning).
+    """
+    new_frame_path = list(target.frame_path)
+    for index, segment in enumerate(new_frame_path):
+        for literal, param_name in value_to_param.items():
+            segment = canonicalize_route(segment, literal, param_name)
+        new_frame_path[index] = segment
+
+    original_name = target.name
+    matched_literal = next(
+        (literal for literal in value_to_param if literal and literal in original_name), None
+    )
+    if matched_literal is None:
+        new_name = original_name
+        new_name_match = target.name_match
+        new_notes = target.notes
+    else:
+        param_name = value_to_param[matched_literal]
+        if original_name == matched_literal:
+            new_name = f":{param_name}"
+            new_name_match = target.name_match  # stays "exact": the whole name IS the parameter
+            new_notes = target.notes
+        else:
+            new_name = _regexify_name(original_name, matched_literal, param_name)
+            new_name_match = "regex"
+            note = (
+                f"name generalized to a regex: the text around :{param_name} was this "
+                "recording's own observed data (e.g. this record's own name), the recorder has "
+                "no evidence it is stable across a different parameter value, and resolution "
+                "requires a unique match, so an over-broad pattern fails loudly rather than "
+                "silently resolving to the wrong element."
+            )
+            new_notes = f"{target.notes} {note}" if target.notes else note
+
+    if (
+        new_frame_path == target.frame_path
+        and new_name == target.name
+        and new_name_match == target.name_match
+    ):
+        return target
+    return target.model_copy(
+        update={"frame_path": new_frame_path, "name": new_name, "name_match": new_name_match,
+                "notes": new_notes}
+    )
+
+
+def _parameterize_names_and_frames(
+    steps: list[Step], value_to_param: dict[str, str]
+) -> list[Step]:
+    if not value_to_param:
+        return steps
+    result: list[Step] = []
+    for step in steps:
+        if step.target is None:
+            result.append(step)
+            continue
+        new_target = _parameterize_target(step.target, value_to_param)
+        if new_target is step.target:
+            result.append(step)
+        else:
+            result.append(step.model_copy(update={"target": new_target}))
+    return result
+
+
+# --------------------------------------------------------------------------------------
+# stage 11: the one optional structured model call (D5)
 # --------------------------------------------------------------------------------------
 
 
@@ -576,24 +860,21 @@ def build_capability(
             break
     if success_checkpoint is None:
         raise ValueError("run.jsonl has no goal_verified event; cannot record a capability")
+    # Stage 4 (Phase 9, B6): generalize BEFORE postconditions are derived -- the last step's
+    # postcondition IS this checkpoint (_derive_postcondition's branch (c)).
+    success_checkpoint = _generalize_success_checkpoint(success_checkpoint, act_events)
 
     steps, outputs = _build_steps(act_events)
     steps = _attach_postconditions(steps, act_events, success_checkpoint)
     steps, inputs, value_to_param = _parameterize(steps, goal)
     steps = _canonicalize_steps(steps, value_to_param)
     success_checkpoint = _canonicalize_checkpoint(success_checkpoint, value_to_param)
+    # Stage 9 (Phase 9, B5): a goal literal can also leak into a descriptor's own name or a
+    # frame_path segment -- neither of which route/value canonicalization above reaches.
+    steps = _parameterize_names_and_frames(steps, value_to_param)
 
-    known_outcomes = list(_KNOWN_OUTCOME_LIBRARY)
-    recovery_rules = list(_RECOVERY_RULE_LIBRARY)
-    if any(event.get("type") == "native_dialog" for event in events):
-        recovery_rules.append(
-            RecoveryRule(
-                id="observed_dialog_this_recording",
-                trigger="a native dialog was actually observed during this specific run",
-                action="dismiss",
-                max_attempts=1,
-            )
-        )
+    known_outcomes = _seed_known_outcomes(steps, _recorded_urls(steps, success_checkpoint))
+    recovery_rules = _seed_recovery_rules(steps, target)
 
     output_names = [output.name for output in outputs]
     metadata = _propose_metadata(llm, goal, steps, output_names) if llm is not None else None

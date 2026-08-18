@@ -186,13 +186,19 @@ def run(
     last_action_key: tuple[str, str | None] | None = None
     repeat_streak = 0
 
-    def _end(status: RunStatus, **event_fields: Any) -> RunOutcome:
-        # The one and only "run_end" event for this run: a completed run must write exactly one
-        # terminal event, never two. Callers (cli.py) must not log a second one after run()
-        # returns, because only this function knows WHICH stopping condition fired and why.
-        logger.event(
-            "run_end",
-            status=status.value,
+    def _end(
+        status: RunStatus,
+        checkpoint: dict[str, Any] | None = None,
+        **event_fields: Any,
+    ) -> RunOutcome:
+        # The only place that builds this run's terminal RunOutcome and writes its one run_end
+        # event -- through EvidenceLogger.run_end, which itself guards against a second call, so
+        # every stopping condition (including goal_verified, below) routes through here rather
+        # than reimplementing this shape inline. `checkpoint` rides into the returned RunOutcome
+        # only, never into the event: the separate `goal_verified` event already carries the
+        # checkpoint under `checkpoint_eval`.
+        logger.run_end(
+            status.value,
             rounds=rounds,
             steps_executed=steps_executed,
             **event_fields,
@@ -204,6 +210,7 @@ def run(
             rounds=rounds,
             rejected_turns=rejected_turns,
             outputs=outputs,
+            checkpoint=checkpoint,
             usage=usage_totals,
         )
 
@@ -315,22 +322,7 @@ def run(
                     checkpoint_eval=checkpoint,
                     rationale=rationale,
                 )
-                logger.event(
-                    "run_end",
-                    status=RunStatus.GOAL_VERIFIED.value,
-                    rounds=rounds,
-                    steps_executed=steps_executed,
-                )
-                return RunOutcome(
-                    status=RunStatus.GOAL_VERIFIED,
-                    run_id=logger.run_id,
-                    steps_executed=steps_executed,
-                    rounds=rounds,
-                    rejected_turns=rejected_turns,
-                    outputs=outputs,
-                    checkpoint=checkpoint,
-                    usage=usage_totals,
-                )
+                return _end(RunStatus.GOAL_VERIFIED, checkpoint=checkpoint)
             logger.event(
                 "rejected_completion",
                 phase="verify",

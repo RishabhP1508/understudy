@@ -29,6 +29,7 @@ docs/adr/0009), never as a pre-flight gate.
 from __future__ import annotations
 
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import AliasChoices, BaseModel, Field, model_validator
 
@@ -62,8 +63,12 @@ class InputParam(BaseModel):
     # The literal value this recording actually observed, kept for a reviewer's benefit -- never
     # populated for a secret-sensitivity param, whose real value was never even in the log to
     # begin with (record/recorder.py never sees it, only the placeholder PolicyGate already
-    # substituted at discovery time).
-    example: str | None = Field(default=None, json_schema_extra=VALUE_CARRYING_EXTRA)
+    # substituted at discovery time). Typed to match `type` above rather than fixed to `str`: an
+    # `example` of `"12345"` on a `type: "integer"` param disagrees with its own declared type,
+    # which is exactly the contract Phase 11's json_schema() export hands to a calling agent.
+    example: str | int | float | bool | None = Field(
+        default=None, json_schema_extra=VALUE_CARRYING_EXTRA
+    )
     sensitivity: Literal["none", "secret", "pii"] = Field(
         default="none", json_schema_extra=STRUCTURAL_EXTRA
     )
@@ -142,6 +147,32 @@ def checkpoint_satisfied(observation: Observation, checkpoint: Checkpoint) -> bo
     return False
 
 
+def login_prefix_len(steps: list[Step], entry_point: str) -> int:
+    """How many of `steps`, from the front, are "the login prefix" -- the steps that ran before
+    the flow first left the entry screen. Both the recorder (record/recorder.py, deciding whether
+    a `reauth` recovery rule is even executable: reauth means "re-navigate to the entry point and
+    re-run these steps", which only makes sense if there ARE any) and the engine
+    (replay/recovery.py's `session_lost_mid_flow` trigger, and replay/engine.py's own reauth
+    callback, which re-executes exactly this many recorded steps) need the SAME answer to "how
+    many steps is the login". Two independently-maintained copies of this rule already drifted
+    once in this project's history (see docs/adr/0006 and ARCHITECTURE.md decision 37 for the
+    general pattern), so it lives in exactly one place, next to `checkpoint_satisfied` -- the
+    established precedent (ARCHITECTURE.md decision 27) for a definition both paths must share.
+
+    The rule: the count of leading steps up to AND INCLUDING the first step whose postcondition is
+    a `url_matches` whose URL PATH differs from the entry point's own path -- i.e. the step whose
+    own action is what first took the flow off the entry screen. 0 when no step ever does that
+    (there is nothing to re-run, so `reauth` is not a capability this flow can offer at all).
+    """
+    entry_path = urlsplit(entry_point).path
+    for index, step in enumerate(steps):
+        postcondition = step.postcondition
+        if postcondition is not None and postcondition.kind == "url_matches":
+            if urlsplit(postcondition.value).path != entry_path:
+                return index + 1
+    return 0
+
+
 class Step(BaseModel):
     """One recorded, replayable action.
 
@@ -176,7 +207,7 @@ class Step(BaseModel):
     # record time, off the same act event's own policy_decision.risk.
     risk_class: str = Field(default="SAFE_REVERSIBLE", json_schema_extra=STRUCTURAL_EXTRA)
     rationale: str
-    on_failure: Literal["dismiss", "retry", "reauth", "wait"] | None = Field(
+    on_failure: Literal["dismiss", "dismiss_dialog", "retry", "reauth", "wait"] | None = Field(
         default=None, json_schema_extra=STRUCTURAL_EXTRA
     )
 
@@ -211,11 +242,21 @@ class RecoveryRule(BaseModel):
     """A declarative recovery action (Phase 9's replay/recovery.py): what to attempt when a
     transient condition -- a slow load, an unexpected dialog, an expired session -- is detected
     mid-replay, before falling through to a hard failure.
+
+    `dismiss` and `dismiss_dialog` are deliberately two separate values, not one: dismissing a
+    NATIVE browser dialog (window.confirm/alert/prompt) goes through Playwright's
+    `page.on("dialog")` handler, a genuinely different mechanism from clicking a DOM control on
+    an HTML interstitial (`dismiss`). An executor cannot re-derive which mechanism was meant from
+    a single shared value, so the two get their own action rather than collapsing into one.
+
+    `trigger` names a registered condition predicate (replay/recovery.py's registry, Phase 9), not
+    free prose -- record/recorder.py populates it with the predicate's name, and replay looks it
+    up by that name rather than parsing a sentence.
     """
 
     id: str = Field(json_schema_extra=STRUCTURAL_EXTRA)
     trigger: str = ""
-    action: Literal["dismiss", "retry", "reauth", "wait"] = Field(
+    action: Literal["dismiss", "dismiss_dialog", "retry", "reauth", "wait"] = Field(
         json_schema_extra=STRUCTURAL_EXTRA
     )
     max_attempts: int = 1
