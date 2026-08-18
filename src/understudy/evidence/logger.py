@@ -112,6 +112,7 @@ class EvidenceLogger:
         self.redactor = Redactor()
         self._seq = 0
         self._trace_started = False
+        self._run_ended = False
 
     # -------------------------------------------------------------------------------- run.jsonl
 
@@ -129,6 +130,22 @@ class EvidenceLogger:
         line = self.redactor.dumps(run_event)
         with (self.dir / "run.jsonl").open("a", encoding="utf-8") as handle:
             handle.write(line + "\n")
+
+    def run_end(self, status: str, **fields: Any) -> None:
+        """The one and only `run_end` event this logger instance will ever write. A completed
+        run must have exactly one terminal event, never two -- measured directly:
+        `evidence/discovery-b2405e162ba4/run.jsonl` has two, one from agent/loop.py's shared
+        stopping-condition helper and one from a second, hand-duplicated code path that built
+        its own event inline. Two call sites (agent/loop.py's own stopping conditions, and
+        cli.py's exception handler) can each legitimately think they are the one ending this
+        run; rather than trust every future call site to check first, a second call here is a
+        silent no-op, guarded by an instance flag set on the first call -- a property this
+        method enforces on itself, not a convention callers have to remember.
+        """
+        if self._run_ended:
+            return
+        self._run_ended = True
+        self.event("run_end", status=status, **fields)
 
     # ------------------------------------------------------------------------------- screenshots
 

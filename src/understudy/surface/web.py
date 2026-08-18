@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Callable
 from typing import Any, Literal
 from urllib.parse import urlparse
 
@@ -241,11 +242,14 @@ class WebSurface:
         self._page = self._browser.new_page()
         self._index_to_ref: dict[str, str] = {}
         # Native browser dialogs (window.confirm/alert/prompt) block Playwright's own
-        # navigation and action calls until answered. Recording the dialog without dismissing
-        # it is deliberate: whether to accept or dismiss is a recovery-policy decision that
-        # belongs to Phase 9, not to perception. dialog_events is drained by the evidence
-        # logger / agent loop.
+        # navigation and action calls until answered. `dialog_policy` is the recovery-policy
+        # seam (Phase 9): None (the default) means record-only, which preserves discovery's
+        # behaviour exactly -- the dialog is recorded and left open. A caller (replay/recovery.py)
+        # that sets this to a closure gets a real per-run attempt cap for free: once its budget is
+        # spent the closure returns "none" and the next dialog genuinely blocks, the same as
+        # discovery today. dialog_events is drained by the evidence logger / agent loop.
         self.dialog_events: list[dict[str, Any]] = []
+        self.dialog_policy: Callable[[dict[str, Any]], str] | None = None
         self._page.on("dialog", self._on_dialog)
 
         # Navigation guard, installed only when a policy is given (a policy-less WebSurface has
@@ -262,8 +266,33 @@ class WebSurface:
             self._page.route("**/*", self._on_route)
             self._page.on("request", self._on_navigation_request)
 
+        # In-flight navigation tracking, installed UNCONDITIONALLY -- independent of the
+        # policy-only guard above, which answers a different question (is this URL allowed).
+        # This answers "is a navigation still in progress right now", which `last_navigation`
+        # and `wait_for_navigation_to_settle` both read off `_pending_navigations` below.
+        self._pending_navigations: set[Any] = set()
+        self.last_navigation: Literal["none", "settled", "in_flight"] = "none"
+        self._page.on("request", self._on_request_started)
+        self._page.on("requestfinished", self._on_request_settled)
+        self._page.on("requestfailed", self._on_request_settled)
+
     def _on_dialog(self, dialog: Any) -> None:
-        self.dialog_events.append({"dialog_type": dialog.type, "message": dialog.message})
+        event = {"dialog_type": dialog.type, "message": dialog.message}
+        decision = self.dialog_policy(event) if self.dialog_policy is not None else "none"
+        event["handled"] = decision
+        self.dialog_events.append(event)
+        if decision == "dismiss":
+            dialog.dismiss()
+        elif decision == "accept":
+            dialog.accept()
+        # "none" leaves the dialog open, exactly as before this seam existed.
+
+    def _on_request_started(self, request: Any) -> None:
+        if request.is_navigation_request():
+            self._pending_navigations.add(request)
+
+    def _on_request_settled(self, request: Any) -> None:
+        self._pending_navigations.discard(request)
 
     def _record_violation(self, url: str) -> None:
         if url not in self.navigation_violations:
@@ -408,9 +437,20 @@ class WebSurface:
         )
 
     def act(self, action: Action) -> str | None:
+        """`last_navigation` (Literal["none", "settled", "in_flight"]) records what this action
+        did to navigation, an OPTIONAL surface capability read via `getattr` -- never added to
+        the Surface protocol itself. "settled": a navigation started and finished (Navigate
+        always; Click when the framenavigated event fired within the bound and that frame's own
+        load state was reached). "in_flight": a Click's bound elapsed with a navigation request
+        still outstanding after the top-level `wait_for_load_state("load")` call -- a slow CHILD
+        FRAME load, since a slow TOP-LEVEL navigation is already absorbed by that same call and
+        correctly reports "settled". "none": nothing navigated at all (every other action kind,
+        or a Click that did not start one).
+        """
         if isinstance(action, Navigate):
             self._page.goto(action.url)
             self._page.wait_for_load_state("load")
+            self.last_navigation = "settled"
             return None
         if isinstance(action, Click):
             ref = self._require_ref(action.node_id)
@@ -418,18 +458,22 @@ class WebSurface:
             return None
         if isinstance(action, Type):
             self._page.locator(f"aria-ref={self._require_ref(action.node_id)}").fill(action.text)
+            self.last_navigation = "none"
             return None
         if isinstance(action, Select):
             self._page.locator(f"aria-ref={self._require_ref(action.node_id)}").select_option(
                 action.value
             )
+            self.last_navigation = "none"
             return None
         if isinstance(action, Key):
             self._page.keyboard.press(action.key)
+            self.last_navigation = "none"
             return None
         if isinstance(action, ReadText):
             locator = self._page.locator(f"aria-ref={self._require_ref(action.node_id)}")
             text: str = locator.inner_text()
+            self.last_navigation = "none"
             return text
         raise ValueError(f"unsupported action: {action!r}")
 
@@ -461,6 +505,11 @@ class WebSurface:
         this fixture (measured directly, docs/adr/0005), so 300ms is >10x headroom for a slower
         machine while still cutting the cost of a non-navigating click by 3-6x versus a naive
         1-second guess (measured: ~1000ms/click -> ~300ms/click).
+
+        Sets `last_navigation` (see act()'s docstring): "settled" once the navigated frame's own
+        load state is reached; otherwise, evaluated AFTER the page-level `wait_for_load_state`
+        below, "in_flight" if `_pending_navigations` is non-empty (a slow child-frame load still
+        outstanding), else "none".
         """
         frame = None
         try:
@@ -473,7 +522,52 @@ class WebSurface:
             pass  # no navigation started within the bound: nothing to settle beyond the page.
         if frame is not None:
             frame.wait_for_load_state("load")
+            self.last_navigation = "settled"
         self._page.wait_for_load_state("load")
+        if frame is None:
+            self.last_navigation = "in_flight" if self._pending_navigations else "none"
+
+    def wait_for_navigation_to_settle(self, timeout_ms: float) -> bool:
+        """An explicit condition wait for a navigation `last_navigation` already reported
+        "in_flight" -- never a sleep. Returns True immediately if nothing is pending. Otherwise
+        waits for the next `framenavigated` event, then that frame's own load state, then the
+        top-level page's, and returns True; a timeout anywhere in that chain means the
+        navigation did not settle within the bound, and this returns False.
+
+        Sets `last_navigation = "settled"` on a successful wait (Phase 9 fix, measured live
+        against the fixture's own `slow_load` injection): without this, a caller re-checking
+        `last_navigation` after a successful wait still saw "in_flight" -- the value `act()` set
+        before this method ever ran -- so replay/recovery.py's `navigation_still_in_flight`
+        trigger kept re-firing on every subsequent evaluation pass even though the navigation had
+        already genuinely settled, burning an entire step's recovery budget on waits that had
+        already succeeded. Left as "in_flight" only when the wait itself times out (`False`),
+        which is the one case where the caller's original observation is still accurate.
+        """
+        if not self._pending_navigations:
+            self.last_navigation = "settled"
+            return True
+        try:
+            frame = self._page.wait_for_event("framenavigated", timeout=timeout_ms)
+            frame.wait_for_load_state("load")
+            self._page.wait_for_load_state("load")
+            self.last_navigation = "settled"
+            return True
+        except PlaywrightTimeoutError:
+            return False
+
+    def pause(self, ms: float) -> None:
+        """The ONE deliberate timed delay anywhere in this system. It exists solely so a retry
+        rule (replay/recovery.py) can space its attempts with real exponential backoff, and it
+        lives here rather than under `replay/` because ARCHITECTURE.md decision 18 bans fixed
+        sleeps there: a retry backoff is a deliberate delay, not a condition wait, and hiding it
+        behind a fake condition would be worse than naming it honestly.
+        """
+        self._page.wait_for_timeout(ms)
+
+    def reload(self) -> None:
+        self._page.reload()
+        self._page.wait_for_load_state("load")
+        self.last_navigation = "settled"
 
     @property
     def url(self) -> str:

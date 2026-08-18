@@ -9,7 +9,9 @@
 <table class="tbl2" border="0" cellpadding="2" cellspacing="0">
 <tr>
 <td class="td3"><font size="2">Member ID</font></td>
-<td class="td4"><input type="text" name="f7" value="{{ query or '' }}"></td>
+<td class="td4"><input type="text" name="f7" value="{{ query or '' }}">
+{% if query_error %}<font color="red">{{ query_error }}</font>{% endif %}
+</td>
 <td class="td5"><input type="button" value="Search" onclick="this.form.submit()"></td>
 </tr>
 </table>

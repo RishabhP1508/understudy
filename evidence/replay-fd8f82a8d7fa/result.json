@@ -1,0 +1,8 @@
+{
+  "kind": "hard_failure",
+  "step_id": null,
+  "category": "invalid_params",
+  "expected": "every supplied parameter to match its declared type",
+  "observed": "parameter 'member_id' declared type 'integer' but got 'not-a-number'",
+  "evidence_refs": []
+}

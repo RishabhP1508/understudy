@@ -90,6 +90,12 @@ def _dispatch_injection() -> Any:
     if mode == "unexpected_dialog":
         if request.args.get("dismiss") == "1":
             return None
+        # One-shot: rendered on every request it is a wall, not an unexpected confirmation, and
+        # its Dismiss link (back_path = request.path) drops the query string, so a persistent
+        # mode would silently destroy a search's own ?f7= parameter and make the mode untestable
+        # rather than hostile.
+        session.pop("inject_mode", None)
+        session.modified = True
         return render_template("interstitial.html", back_path=request.path), 200
 
     if mode == "session_expired":
@@ -101,9 +107,15 @@ def _dispatch_injection() -> Any:
         return None
 
     if mode == "transient_failure":
-        attempts = session.setdefault("attempts", {})
-        count = attempts.get(request.path, 0) + 1
-        attempts[request.path] = count
+        # Keyed on the SESSION, not on request.path: this app is a frameset, so one logical page
+        # load is three separate paths (/app, /nav, /members), each hitting this dispatcher on
+        # its own. A per-path counter gives each frame its own independent 0->3 quota, so a stale
+        # 503 can still be "due" in one frame after another has already cleared -- that models
+        # three concurrent outages, not the one brief, whole-session outage a transient failure
+        # actually is. One counter for the whole session means the outage clears once, for
+        # everything, exactly like a real backend blip would.
+        count = session.get("transient_attempts", 0) + 1
+        session["transient_attempts"] = count
         session.modified = True
         if count < 3:
             return (
@@ -164,7 +176,7 @@ def admin_inject() -> Any:
     elif mode in INJECT_MODES:
         session["inject_mode"] = mode
         if mode == "transient_failure":
-            session["attempts"] = {}
+            session["transient_attempts"] = 0
     else:
         return {"error": f"unknown inject mode: {mode}"}, 400
     session.modified = True
@@ -178,12 +190,28 @@ def admin_inject() -> Any:
 
 @app.route("/login", methods=["GET", "POST"])
 def login() -> Any:
+    # Arm (or clear) an injection mode from the login URL, before anything else: replay drives a
+    # fresh browser session that never made the same-session /admin/inject request a live operator
+    # would, so this is the only door in. /login is itself in EXEMPT_PATHS, so an armed mode never
+    # applies TO the login page -- only to whatever the session visits after.
+    mode = request.args.get("inject")
+    if mode in INJECT_MODES:
+        session["inject_mode"] = mode
+        session.modified = True
+    elif mode in ("none", "clear"):
+        session.pop("inject_mode", None)
+        session.modified = True
+
     if request.method == "POST":
         username = request.form.get("f1", "").strip()
         password = request.form.get("f2", "").strip()
         if username and password:
+            # session.clear() below would otherwise destroy a mode armed by the GET above.
+            armed_mode = session.get("inject_mode")
             session.clear()
             session["user"] = username
+            if armed_mode is not None:
+                session["inject_mode"] = armed_mode
             return redirect(url_for("app_frameset"))
         return render_template("login.html", error="Username and password are required."), 200
     return render_template("login.html", error=None)
@@ -216,13 +244,17 @@ def nav() -> Any:
 def members() -> Any:
     query = request.args.get("f7", "").strip()
     result: dict[str, Any] | None = None
+    query_error: str | None = None
     if query:
-        match = MEMBERS.get(query)
-        if match and not match.get("missing"):
-            result = {"found": True, "id": query, "name": match.get("name", "")}
+        if g.inject_mode == "validation":
+            query_error = "Member ID could not be validated. Please re-enter."
         else:
-            result = {"found": False}
-    return render_template("members.html", query=query, result=result)
+            match = MEMBERS.get(query)
+            if match and not match.get("missing"):
+                result = {"found": True, "id": query, "name": match.get("name", "")}
+            else:
+                result = {"found": False}
+    return render_template("members.html", query=query, result=result, query_error=query_error)
 
 
 @app.route("/member/<mid>")

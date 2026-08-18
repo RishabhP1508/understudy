@@ -1,0 +1,24 @@
+{
+  "url": "http://127.0.0.1:5055/app",
+  "title": "Error",
+  "elements": [
+    {
+      "node_id": "0",
+      "role": "generic",
+      "name": "",
+      "value": "An unexpected error occurred.",
+      "states": [
+        "active"
+      ],
+      "bounds": null,
+      "sensitivity": "none",
+      "depth": 0,
+      "frame_path": [],
+      "ancestors": [],
+      "name_source": "none"
+    }
+  ],
+  "urls": [
+    "http://127.0.0.1:5055/app"
+  ]
+}
