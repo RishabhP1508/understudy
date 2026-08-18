@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from datetime import UTC, datetime
@@ -520,9 +521,76 @@ def operator(
 
 
 @app.command()
-def catalog() -> None:
-    typer.echo("not implemented")
-    raise typer.Exit(2)
+def catalog(
+    transport: Annotated[
+        str, typer.Option("--transport", help="transport to serve over; only 'stdio' today")
+    ] = "stdio",
+    artifacts_dir: Annotated[
+        Path,
+        typer.Option("--artifacts-dir", help="directory of capability artifacts to publish"),
+    ] = Path("artifacts"),
+    policy: Annotated[
+        Path, typer.Option("--policy", help="path to the policy YAML")
+    ] = Path("policies/legacy_bank.yaml"),
+    evidence_dir: Annotated[
+        Path, typer.Option("--evidence-dir", help="base directory for replay evidence")
+    ] = Path("evidence"),
+    intervention_dir: Annotated[
+        Path,
+        typer.Option("--intervention-dir", help="base directory for intervention records"),
+    ] = Path("evidence/interventions"),
+    intervention_ttl: Annotated[
+        float,
+        typer.Option(
+            "--intervention-ttl",
+            help=(
+                "seconds a blocked (RISKY_IRREVERSIBLE or recoverable-condition) replay waits "
+                "for a human before the MCP tool call returns a failure. Kept well under "
+                "discover/replay's own 900s default on purpose: a calling agent's tool call "
+                "blocking for fifteen minutes on a human is a broken contract."
+            ),
+        ),
+    ] = 180,
+) -> None:
+    """Serve every artifact under --artifacts-dir as an MCP tool (Phase 11: R2's "agent-invocable
+    capability"). Reloads from disk on every list/call -- no caching -- so a fresh `discover`,
+    `record`, or `approve` is visible with no server restart."""
+    if transport != "stdio":
+        typer.echo(
+            f"unsupported --transport {transport!r}; only 'stdio' is implemented today", err=True
+        )
+        raise typer.Exit(1)
+    from understudy.catalog.server import serve_stdio
+
+    asyncio.run(
+        serve_stdio(artifacts_dir, policy, evidence_dir, intervention_dir, intervention_ttl)
+    )
+
+
+@app.command()
+def approve(
+    artifact: Annotated[
+        Path, typer.Option("--artifact", help="path to a capability artifact to mark approved")
+    ],
+) -> None:
+    """Mark a capability APPROVED after a human has reviewed it -- a separate, human-run command,
+    out of band from `catalog`'s own server, which never writes `status` itself.
+
+    `Capability.status` has gated RISKY_IRREVERSIBLE replay since Phase 5 (safety/policy.py), but
+    nothing before this command ever wrote `"approved"` -- the approved branch was dead code. This
+    wires it: load, flip `status`, write back through Redactor (never a bare `json.dump` -- the
+    one serialization path, ARCHITECTURE.md decision 10), and echo what changed.
+    """
+    capability = Capability.model_validate_json(artifact.read_text(encoding="utf-8"))
+    if capability.status == "approved":
+        typer.echo(f"{artifact} is already approved; nothing to do.")
+        raise typer.Exit(1)
+    approved_capability = capability.model_copy(update={"status": "approved"})
+    artifact.write_text(Redactor().dumps(approved_capability, indent=2), encoding="utf-8")
+    typer.echo(
+        f"approved {artifact} (capability_id={capability.capability_id!r}, "
+        f"version={capability.version}): status draft -> approved"
+    )
 
 
 if __name__ == "__main__":

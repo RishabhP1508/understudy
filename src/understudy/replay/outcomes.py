@@ -66,10 +66,15 @@ def _validation_rejected(observation: Observation) -> str | None:
     return scan_text(observation, ("could not be validated",))
 
 
+def _balance_check(observation: Observation) -> str | None:
+    return scan_text(observation, ("Insufficient funds",))
+
+
 DETECTORS: dict[str, Detector] = {
     "member_lookup_no_match": _member_lookup_no_match,
     "permission_denied": _permission_denied,
     "validation_rejected": _validation_rejected,
+    "balance_check": _balance_check,
 }
 
 

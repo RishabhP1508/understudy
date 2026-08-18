@@ -575,14 +575,20 @@ def test_read_only_lookup_flow_earns_three_outcomes_not_insufficient_funds() -> 
     assert "insufficient_funds" not in codes
 
 
-def test_risky_or_deposit_flow_still_never_earns_insufficient_funds() -> None:
-    """Even a flow with a deposit-shaped field must never earn `insufficient_funds`: B4 drops the
-    seed entirely (its detector, `balance_check`, does not exist in B1's DETECTORS registry --
-    outcomes.validate() would fail loudly the moment it were ever emitted), so there is no
-    predicate left that could produce this code at all."""
-    steps = [_step_with_target(0, "type", "Deposit Amount")]
+def test_deposit_flow_earns_insufficient_funds_and_its_detector_resolves() -> None:
+    """This reverses the Phase 9 decision above: a flow that types into a money-shaped field
+    ("Deposit Amount") and later submits it with a click DOES earn `insufficient_funds` now,
+    because a real subaccount-opening capability (Phase 10) does exactly that and can genuinely be
+    told "no" by the fixture (fixtures/legacy_bank/app.py, Phase 11). `balance_check` is no longer
+    an unregistered name either -- `outcomes.resolve_detector` resolves it to a real callable. See
+    docs/adr/0016."""
+    steps = [
+        _step_with_target(0, "type", "Deposit Amount"),
+        _step_with_target(1, "click", "Submit", role="button"),
+    ]
     codes = {o.code for o in _seed_known_outcomes(steps, [])}
-    assert "insufficient_funds" not in codes
+    assert "insufficient_funds" in codes
+    assert callable(outcomes.resolve_detector("balance_check"))
 
 
 def test_reauth_rule_only_seeded_when_a_login_prefix_exists() -> None:

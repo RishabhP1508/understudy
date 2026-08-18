@@ -1,9 +1,9 @@
 {
   "schema_version": 2,
-  "version": 3,
-  "capability_id": "look-up-member-12345-and-read-their-current-savings-balance",
-  "name": "get_member_savings_balance",
-  "description": "Logs into the member portal, searches for a specific member by ID, and retrieves their current savings balance.",
+  "version": 1,
+  "capability_id": "open-a-new-savings-subaccount-for-member-12345-with-the-nickname-vacation-fund-and-an-initial-deposit-of-250",
+  "name": "open_savings_subaccount",
+  "description": "Automates the process of logging into the banking portal, selecting a specific member, and opening a new savings subaccount with a custom nickname and initial deposit.",
   "target": {
     "app_id": "legacy_bank",
     "entry_point": "http://127.0.0.1:5055/login",
@@ -26,16 +26,17 @@
       "description": "the value typed into 'Member ID'",
       "example": 12345,
       "sensitivity": "none"
-    }
-  ],
-  "outputs": [
+    },
     {
-      "name": "savings_balance",
-      "type": "string",
-      "description": "The numerical value of the member's current savings balance.",
-      "source_step_id": "6"
+      "name": "initial_deposit",
+      "type": "integer",
+      "required": true,
+      "description": "the value typed into 'Initial Deposit'",
+      "example": 250,
+      "sensitivity": "none"
     }
   ],
+  "outputs": [],
   "steps": [
     {
       "id": "0",
@@ -55,7 +56,7 @@
         "dom_fallback": null,
         "confidence": 0.5,
         "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
-        "recorded_rank": null
+        "recorded_rank": 1
       },
       "value": "admin",
       "precondition": null,
@@ -65,7 +66,7 @@
         "value": "Password"
       },
       "risk_class": "SAFE_REVERSIBLE",
-      "rationale": "Type 'admin' into Username field.",
+      "rationale": "Logging in to access the banking system.",
       "on_failure": null
     },
     {
@@ -86,7 +87,7 @@
         "dom_fallback": null,
         "confidence": 0.5,
         "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
-        "recorded_rank": null
+        "recorded_rank": 1
       },
       "value": {
         "kind": "param_ref",
@@ -99,7 +100,7 @@
         "value": "Login"
       },
       "risk_class": "SAFE_REVERSIBLE",
-      "rationale": "Type '[REDACTED]' into Password field.",
+      "rationale": "Logging in to access the banking system.",
       "on_failure": null
     },
     {
@@ -117,7 +118,7 @@
         "dom_fallback": null,
         "confidence": 0.9,
         "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
-        "recorded_rank": null
+        "recorded_rank": 1
       },
       "value": null,
       "precondition": null,
@@ -127,7 +128,7 @@
         "value": "http://127.0.0.1:5055/members"
       },
       "risk_class": "SAFE_REVERSIBLE",
-      "rationale": "Click Login button to log into the application.",
+      "rationale": "Submitting the login credentials.",
       "on_failure": null
     },
     {
@@ -150,7 +151,7 @@
         "dom_fallback": null,
         "confidence": 0.65,
         "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
-        "recorded_rank": null
+        "recorded_rank": 1
       },
       "value": {
         "kind": "param_ref",
@@ -163,7 +164,7 @@
         "value": "Search"
       },
       "risk_class": "SAFE_REVERSIBLE",
-      "rationale": "Enter Member ID 12345 into the Member ID search box.",
+      "rationale": "Searching for member 12345.",
       "on_failure": null
     },
     {
@@ -186,7 +187,7 @@
         "dom_fallback": null,
         "confidence": 0.95,
         "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
-        "recorded_rank": null
+        "recorded_rank": 1
       },
       "value": null,
       "precondition": null,
@@ -196,7 +197,7 @@
         "value": "http://127.0.0.1:5055/members?f7=:member_id"
       },
       "risk_class": "SAFE_REVERSIBLE",
-      "rationale": "Click Search button to look up member 12345.",
+      "rationale": "Clicking Search to find member 12345.",
       "on_failure": null
     },
     {
@@ -216,7 +217,7 @@
         "dom_fallback": null,
         "confidence": 0.9,
         "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM name generalized to a regex: the text around :member_id was this recording's own observed data (e.g. this record's own name), the recorder has no evidence it is stable across a different parameter value, and resolution requires a unique match, so an over-broad pattern fails loudly rather than silently resolving to the wrong element.",
-        "recorded_rank": null
+        "recorded_rank": 1
       },
       "value": null,
       "precondition": null,
@@ -226,53 +227,143 @@
         "value": "http://127.0.0.1:5055/member/:member_id/balance"
       },
       "risk_class": "SAFE_REVERSIBLE",
-      "rationale": "Click on member link '12345 - Testuser Alpha' to view member details.",
+      "rationale": "Selecting member 12345 to view their account details.",
       "on_failure": null
     },
     {
       "id": "6",
       "index": 6,
-      "action": "extract",
+      "action": "click",
       "target": {
-        "role": "generic",
-        "name": "Savings Balance",
+        "role": "link",
+        "name": "Open Subaccount",
         "name_match": "exact",
-        "scope": [
-          [
-            "iframe",
-            "Savings Balance"
-          ]
-        ],
+        "scope": [],
         "frame_path": [
-          "contentframe",
-          "/member/:member_id/balance"
+          "contentframe"
         ],
         "ordinal": null,
+        "relational": null,
+        "dom_fallback": null,
+        "confidence": 0.9,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
+        "recorded_rank": 1
+      },
+      "value": null,
+      "precondition": null,
+      "postcondition": {
+        "kind": "url_matches",
+        "target": "any_frame",
+        "value": "http://127.0.0.1:5055/member/:member_id/subaccount/new"
+      },
+      "risk_class": "SAFE_REVERSIBLE",
+      "rationale": "Opening the form to create a new subaccount.",
+      "on_failure": null
+    },
+    {
+      "id": "7",
+      "index": 7,
+      "action": "type",
+      "target": {
+        "role": "textbox",
+        "name": "Nickname",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": 0,
         "relational": {
           "kind": "row_label",
-          "label": "Savings Balance"
+          "label": "Nickname"
         },
         "dom_fallback": null,
-        "confidence": 0.65,
+        "confidence": 0.5,
         "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
-        "recorded_rank": null
+        "recorded_rank": 1
       },
-      "value": "savings_balance",
+      "value": "Vacation Fund",
       "precondition": null,
       "postcondition": {
         "kind": "element_present",
-        "target": "generic",
-        "value": "Savings Balance"
+        "target": "textbox",
+        "value": "Initial Deposit"
       },
       "risk_class": "SAFE_REVERSIBLE",
-      "rationale": "Extract the current savings balance for member 12345.",
+      "rationale": "Entering the nickname for the new savings subaccount.",
+      "on_failure": null
+    },
+    {
+      "id": "8",
+      "index": 8,
+      "action": "type",
+      "target": {
+        "role": "textbox",
+        "name": "Initial Deposit",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": 1,
+        "relational": {
+          "kind": "row_label",
+          "label": "Initial Deposit"
+        },
+        "dom_fallback": null,
+        "confidence": 0.5,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
+        "recorded_rank": 1
+      },
+      "value": {
+        "kind": "param_ref",
+        "name": "initial_deposit"
+      },
+      "precondition": null,
+      "postcondition": {
+        "kind": "element_present",
+        "target": "button",
+        "value": "Submit"
+      },
+      "risk_class": "SAFE_REVERSIBLE",
+      "rationale": "Entering the initial deposit amount for the new subaccount.",
+      "on_failure": null
+    },
+    {
+      "id": "9",
+      "index": 9,
+      "action": "click",
+      "target": {
+        "role": "button",
+        "name": "Submit",
+        "name_match": "exact",
+        "scope": [],
+        "frame_path": [
+          "contentframe"
+        ],
+        "ordinal": null,
+        "relational": null,
+        "dom_fallback": null,
+        "confidence": 0.9,
+        "notes": "no dom_fallback recorded: perception is accessibility-only and never reads the DOM",
+        "recorded_rank": 1
+      },
+      "value": null,
+      "precondition": null,
+      "postcondition": {
+        "kind": "text_present",
+        "target": "page",
+        "value": "Subaccount Opened"
+      },
+      "risk_class": "RISKY_IRREVERSIBLE",
+      "rationale": "Submitting the form to create the new subaccount.",
       "on_failure": null
     }
   ],
   "success": {
-    "kind": "element_present",
-    "target": "generic",
-    "value": "Savings Balance"
+    "kind": "text_present",
+    "target": "page",
+    "value": "Subaccount Opened"
   },
   "known_outcomes": [
     {
@@ -327,24 +418,13 @@
     }
   ],
   "provenance": {
-    "run_id": "b2405e162ba4",
-    "model": "gemini-3.6-flash",
-    "timestamp": "2026-08-18T01:22:37.477512+00:00",
+    "run_id": "idc6c0778a1d81",
+    "model": "gemini-3.1-flash-lite",
+    "timestamp": "2026-08-18T07:35:17.341560+00:00",
     "code_sha": null,
     "perception_version": 2,
-    "transcript_hash": "c0fb251a4f094c8cdda1ce82f8d6133ff84b882d930c6330f8fa009d00e4eb10"
+    "transcript_hash": "d975e80861e887ec056cd8f947d25904be07a5b0a7f7d83406a268fc9f08d5c2"
   },
-  "status": "approved",
-  "stability": {
-    "runs": 5,
-    "successes": 5,
-    "last_n_outcomes": [
-      "success",
-      "success",
-      "success",
-      "success",
-      "success"
-    ],
-    "computed_at": "2026-08-18T02:04:56.688645+00:00"
-  }
+  "status": "draft",
+  "stability": null
 }

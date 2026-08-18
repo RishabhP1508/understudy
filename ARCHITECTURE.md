@@ -399,7 +399,12 @@ raises an error instead of going quietly dormant.
     because a declared outcome the flow cannot reach is a false contract. A recovery rule is gated
     on whether replay can PERFORM it, because a dialog or a slow load can happen to any flow and
     gating those on "did this run hit one" would strip every rule from every clean recording.
-    Measured: the read-only balance lookup no longer declares `insufficient_funds`.
+    Measured: the read-only balance lookup no longer declares `insufficient_funds`. Phase 11
+    reinstated that seed for the flow that actually earns it: the subaccount-opening capability
+    types into "Initial Deposit" and submits it, which spends value and can be told no, so its own
+    known_outcomes now include `insufficient_funds` while the read-only lookup's still do not --
+    the same PRODUCE axis correctly gating two different flows two different ways. See
+    `docs/adr/0016`.
 73. Drift is reported without inventing a baseline. `TargetDescriptor.recorded_rank` is measured by
     `describe()` where it can be, and is None on every artifact recorded before the field existed;
     the second clause, "a non-empty recorded name resolved on a strategy that did not match that
@@ -456,3 +461,40 @@ raises an error instead of going quietly dormant.
 84. A test that proves a mechanism is not a test that proves its wiring. Four defects this phase were
     unreachable from a real run while passing their own tests. The check that distinguishes the two
     is to sever the production call with a one-line edit and confirm a test fails.
+
+## Phase 11 decisions
+
+85. Every capability under `artifacts/` is published as one MCP tool over stdio
+    (`catalog/server.py`), addressed by name and invoked with typed arguments -- the literal
+    closing of the brief's own through-line, "deterministic replay is how the AI agent invokes it
+    in production." The low-level `mcp.server.lowlevel.Server` is used deliberately, not the
+    decorator/signature-inference surface: a tool's input schema here is `Capability.json_schema()`,
+    built from data read at request time, not from a Python function's own parameters. See
+    docs/adr/0017.
+86. Only the highest `version` per `capability_id` is ever published, re-read from disk on every
+    `list_tools`/`call_tool` call, never cached at server start. Why: artifacts are append-only
+    (decision 61/docs/adr/0011), so an unfiltered catalog would show four tools for four revisions
+    of two capabilities, and caching would reintroduce the "stale process serves old code" failure
+    this project has already paid for once.
+87. The catalog is a STRICTLY STRONGER gate than `safety/policy.py`'s own risk check: it refuses to
+    invoke ANY capability whose `status` is `"draft"`, not only a `RISKY_IRREVERSIBLE` step inside
+    one, and it hardcodes `allow_risky=False` with no parameter and no code path that could set it
+    otherwise. There is no function anywhere in `catalog/` that writes `Capability.status`. Why: an
+    agent-facing catalog that could quietly perform an irreversible action, or mark its own artifact
+    reviewed, is the worst version of this feature -- human review has to happen somewhere the
+    calling agent cannot reach, which is why `understudy approve` (B3) is a separate, human-run CLI
+    command, never an MCP tool.
+88. `Capability.status` is finally WIRED on the write side: `understudy approve` loads an artifact,
+    flips `status` to `"approved"`, and writes it back through `Redactor`, closing a branch that had
+    read `"approved"` since Phase 5 with nothing in the codebase ever producing it.
+89. The MCP result contract's own `isError` flag is mapped onto this project's result kinds, not
+    invented fresh: `success`/`business_outcome`/`escalated` are all `isError=False` (a business
+    outcome is a legitimate answer, and an escalation means a human is or was involved -- neither is
+    a tool malfunction, ARCHITECTURE.md decision 8 again, this time at the protocol boundary), and
+    only `hard_failure` (or the catalog's own refusal: an unknown tool, a draft capability) is
+    `isError=True`.
+90. A blocked `RISKY_IRREVERSIBLE` step inside an approved capability still escalates through the
+    same `InterventionStore` Phase 10 built, with its own TTL -- kept in the low hundreds of
+    seconds by `catalog`'s own CLI default, well under `discover`/`replay`'s 900s, because an MCP
+    `call_tool` is a synchronous request a calling agent is blocked on. See docs/adr/0017's TTL
+    tradeoff.

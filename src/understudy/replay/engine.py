@@ -75,6 +75,21 @@ _PolicyException = (PolicyDenied, EscalationRequired, NavigationBlocked)
 _MAX_RECOVERY_ATTEMPTS_PER_RUN = 40
 
 
+def _with_expiry_note(observed: str, request_id: str) -> str:
+    """Append an escalation's expiry to an ALREADY-BUILT HardFailure's `observed`, never replace
+    it (F1, Phase 11 round 2). `observed` at the two call sites below is the original refusal
+    reason -- e.g. "risk_replay: RISKY_IRREVERSIBLE refused ... requires capability status
+    'approved' and allow_risky=True" -- which is exactly the "why" a calling agent needs to decide
+    what to do next. That reason survives in the intervention record and in run.jsonl, but the
+    RETURNED RESULT is the only thing the caller actually sees; overwriting it with just "nobody
+    answered" threw the why away at the one place it mattered most.
+    """
+    return (
+        f"{observed} -- escalated as intervention {request_id!r}, which expired with no "
+        "operator resolution"
+    )
+
+
 def _missing_required_params(capability: Capability, params: dict[str, Any]) -> list[str]:
     """Every declared `InputParam` the capability requires that the caller's own `params` did not
     supply. Checked once, up front, before anything else runs (R3: replay is given "an artifact
@@ -771,7 +786,7 @@ def _run_step(
             return hard_failure.model_copy(
                 update={
                     "category": FailureCategory.ESCALATION_UNRESOLVED,
-                    "observed": f"intervention {request_id!r} expired with no operator resolution",
+                    "observed": _with_expiry_note(hard_failure.observed, request_id),
                 }
             )
         run_state.last_resolution = resolution.action_taken
@@ -828,7 +843,7 @@ def _run_step(
             return hard_failure.model_copy(
                 update={
                     "category": FailureCategory.ESCALATION_UNRESOLVED,
-                    "observed": f"intervention {request_id!r} expired with no operator resolution",
+                    "observed": _with_expiry_note(hard_failure.observed, request_id),
                 }
             )
         run_state.last_resolution = resolution.action_taken

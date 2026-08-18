@@ -17,6 +17,8 @@ dependencies = [
     "google-genai",
     "flask",
     "pillow",
+    "mcp",
+    "anyio",
 ]
 
 [project.optional-dependencies]
@@ -29,6 +31,7 @@ where = ["src"]
 minversion = "8.0"
 testpaths = ["tests"]
 addopts = "-q -rs"
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100
