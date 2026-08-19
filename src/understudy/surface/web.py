@@ -30,6 +30,7 @@ from playwright.sync_api import sync_playwright
 from understudy.models.intervention import HumanAction
 from understudy.models.observation import Observation, UIElement
 from understudy.safety.policy import Policy
+from understudy.safety.redact import classify_field_sensitivity
 from understudy.surface.base import Action, Click, Key, Navigate, ReadText, Select, Type
 
 _LINE_RE = re.compile(r"^(?P<indent>\s*)- (?P<content>.*)$")
@@ -60,6 +61,20 @@ _HUMAN_ACTION_CAP = 500
 # wait.
 _HUMAN_ACTION_DRAIN_SETTLE_TIMEOUT_MS = 8000
 
+# The sentinel written in place of a captured value, on BOTH layers that ever suppress one (this
+# script's own `record()`, for a raw `input type="password"`; `WebSurface.drain_human_actions`'s
+# Python-side second layer, for a field whose NAME classify_field_sensitivity calls secret/pii).
+# Deliberately NOT an empty string: empty is what an untouched or genuinely-cleared field looks
+# like, and a reviewer reading `evidence/interventions/*.json` has to be able to tell "this value
+# was never captured on purpose" apart from "the human typed nothing here" (see this module's own
+# module docstring reference and the task that added this -- a human's password was previously
+# captured one keystroke at a time in plain text, because neither redaction rule fires on a value
+# nobody ever registered as a secret: R1 needs a declared capability parameter, which a human's own
+# typing during a handoff never is, and R3 needs a credential-shaped literal, which "hunter2" is
+# not). Suppressing after the fact would also be useless here: masking only the FINAL value would
+# still leave every keystroke-by-keystroke prefix sitting in the record.
+_HUMAN_ACTION_SUPPRESSED = "[SUPPRESSED]"
+
 # Kept deliberately tiny (ladder step: the DOM traversal that only JS can do -- tagName, input
 # type, and the best name-ish string visible from the element -- stays in JS; translating that
 # into the project's role vocabulary happens in Python, in `_human_action_role`, where the
@@ -67,9 +82,18 @@ _HUMAN_ACTION_DRAIN_SETTLE_TIMEOUT_MS = 8000
 # it SURVIVES navigation and reload within the tab (a plain variable is wiped by the next
 # navigation's fresh JS environment); add_init_script re-installs the listeners on every
 # navigation, sessionStorage carries the accumulated data across them.
+#
+# `record()` already reads `el.type` into `it` for every event, for the role mapping
+# (`_human_action_role`) to use later -- suppressing the VALUE for a password field here, at the
+# point of capture, means the real keystrokes never leave the page at all, rather than being
+# captured and redacted afterward (see `_HUMAN_ACTION_SUPPRESSED`'s own docstring for why "after
+# the fact" cannot work for this specific case). This is layer one of two; layer two
+# (`WebSurface.drain_human_actions`) catches a sensitive field that is not `type="password"` at
+# all, by the same NAME classification the rest of this codebase already uses.
 _HUMAN_ACTION_CAPTURE_SCRIPT = """
 (() => {
   const CAP = %d;
+  const SUPPRESSED = %r;
   const KEY = "__understudy_human_actions";
   function push(rec) {
     try {
@@ -99,12 +123,14 @@ _HUMAN_ACTION_CAPTURE_SCRIPT = """
     return "";
   }
   function record(kind, el) {
+    const inputType = el ? (el.type || "") : "";
+    const isPassword = inputType.toLowerCase() === "password";
     push({
       k: kind,
       t: el ? (el.tagName || "").toLowerCase() : "",
-      it: el ? (el.type || "") : "",
+      it: inputType,
       n: el ? bestName(el) : "",
-      v: el && el.value !== undefined ? String(el.value) : null,
+      v: isPassword ? SUPPRESSED : (el && el.value !== undefined ? String(el.value) : null),
       u: null,
       at: new Date().toISOString(),
     });
@@ -757,7 +783,9 @@ class WebSurface:
         event at all -- see `HumanAction`'s own docstring; that case is evidenced instead by
         `dialog_events`' own `handled` value.
         """
-        self._page.add_init_script(_HUMAN_ACTION_CAPTURE_SCRIPT % _HUMAN_ACTION_CAP)
+        self._page.add_init_script(
+            _HUMAN_ACTION_CAPTURE_SCRIPT % (_HUMAN_ACTION_CAP, _HUMAN_ACTION_SUPPRESSED)
+        )
 
     def _read_human_action_buffer(self) -> list[dict[str, Any]]:
         """One `page.evaluate()` round trip: read the captured array out of the MAIN FRAME's
@@ -823,12 +851,22 @@ class WebSurface:
                 if kind == "navigate"
                 else _human_action_role(item.get("t", ""), item.get("it", ""))
             )
+            name = item.get("n") or ""
+            value = item.get("v")
+            # Layer two of two (see _HUMAN_ACTION_SUPPRESSED's own docstring): the injected
+            # script's `record()` already suppresses a raw `input type="password"` at the
+            # source, but a sensitive field is not always typed "password" (an SSN or account
+            # number field is plain text) -- this reuses the project's own
+            # `classify_field_sensitivity`, never a second, separately-maintained keyword list,
+            # so the two layers can never disagree about which names count as sensitive.
+            if value is not None and classify_field_sensitivity(name) != "none":
+                value = _HUMAN_ACTION_SUPPRESSED
             actions.append(
                 HumanAction(
                     kind=kind,
                     role=role,
-                    name=item.get("n") or "",
-                    value=item.get("v"),
+                    name=name,
+                    value=value,
                     url=item.get("u"),
                     at=item.get("at", ""),
                 )

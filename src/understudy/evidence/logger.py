@@ -84,16 +84,16 @@ class RunEvent(BaseModel):
         # R5: "every action event carries a rationale". Enforced here, not just by convention, so
         # an action without a stated reason cannot be written to the log at all.
         #
-        # This deliberately does NOT also reject the literal "[REDACTED]": measured against the
-        # real artifact in artifacts/ (recorded from evidence/discovery-3348784c8a88/, the one
-        # genuine discovery run this project's non-negotiable requirement depends on), step 1's
-        # own rationale IS that literal string -- the model's real reasoning for typing the
-        # password happened to be credential-shaped enough that Phase 2's redaction rule replaced
-        # it whole, and that value is now permanently part of a real artifact this project must
-        # never edit. Rejecting it here would mean this evidence can never replay again. A model
-        # producing that literal live, in discovery, is instead caught one layer up
-        # (agent/loop.py), where "was this rationale ever real" can still be judged against a
-        # live model turn rather than a historical artifact.
+        # This deliberately does NOT also reject the literal "[REDACTED]": measured against a real
+        # artifact in artifacts/, recorded from a genuine discovery run whose own evidence log
+        # predates the one shipped under evidence/discovery/ today, step 1's own rationale IS that
+        # literal string -- the model's real reasoning for typing the password happened to be
+        # credential-shaped enough that Phase 2's redaction rule replaced it whole, and that value
+        # is now permanently part of a real artifact this project must never edit. Rejecting it
+        # here would mean this evidence can never replay again. A model producing that literal
+        # live, in discovery, is instead caught one layer up (agent/loop.py), where "was this
+        # rationale ever real" can still be judged against a live model turn rather than a
+        # historical artifact.
         if self.type == "act":
             rationale = (self.rationale or "").strip()
             if not rationale:
@@ -139,7 +139,7 @@ class EvidenceLogger:
     def run_end(self, status: str, **fields: Any) -> None:
         """The one and only `run_end` event this logger instance will ever write. A completed
         run must have exactly one terminal event, never two -- measured directly:
-        `evidence/discovery-b2405e162ba4/run.jsonl` has two, one from agent/loop.py's shared
+        `evidence/discovery/run.jsonl` has two, one from agent/loop.py's shared
         stopping-condition helper and one from a second, hand-duplicated code path that built
         its own event inline. Two call sites (agent/loop.py's own stopping conditions, and
         cli.py's exception handler) can each legitimately think they are the one ending this

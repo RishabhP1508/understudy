@@ -1463,9 +1463,9 @@ def test_reason_code_policy_refused_is_raised_by_discovery_navigation_blocked(
     assert "navigation left the allowlist" in record.request.context["reason"]
 
 
-BALANCE_EVIDENCE_DIR = Path(__file__).parent.parent / "evidence" / "discovery-b2405e162ba4"
+BALANCE_EVIDENCE_DIR = Path(__file__).parent.parent / "evidence" / "discovery"
 BALANCE_GOAL = "look up member 12345 and read their current savings balance"
-SUBACCOUNT_EVIDENCE_DIR = Path(__file__).parent.parent / "evidence" / "discovery-adccddf2b6e5"
+SUBACCOUNT_EVIDENCE_DIR = Path(__file__).parent.parent / "evidence" / "discovery-subaccount"
 SUBACCOUNT_GOAL = "open a new sub-account for member 12345 and reach the confirmation screen"
 _LIVE_PARAMS = {"password": "testpass", "member_id": 12345}
 
@@ -1488,20 +1488,18 @@ def _rebuilt_balance_capability() -> Capability:
 
 
 def _rebuilt_subaccount_capability() -> Capability:
-    """Rebuilt from the real subaccount-goal discovery run -- the one genuine recording whose own
-    'Submit' step is a mutating_routes match (docs/adr/0007's update), so replaying it TODAY,
-    under the fixed policy gate, correctly refuses it as RISKY_IRREVERSIBLE. This is the exact
-    scenario ARCHITECTURE.md decision 13's own PolicyGate docstring names: "the fixture's own
-    subaccount 'Submit' was dispatched as SAFE_REVERSIBLE" under the old, buggy gate -- replaying
-    the SAME real recording under the current one is what makes it a genuine RISKY_IRREVERSIBLE
-    policy refusal to escalate, not a fabricated one.
+    """Rebuilt from the real subaccount-goal discovery run (evidence/discovery-subaccount) -- the
+    one genuine recording whose own last step clicks 'Submit' on a mutating route
+    (/member/*/subaccount/new). Risk is classified at REPLAY time, from the live policy's own
+    mutating_routes (safety/risk.py), never read off the artifact -- so replaying this recorded
+    click today is a genuine RISKY_IRREVERSIBLE policy refusal to escalate, not a fabricated one.
     """
     policy = load_policy(POLICY_PATH)
     return build_capability(
         run_dir=SUBACCOUNT_EVIDENCE_DIR,
         goal=SUBACCOUNT_GOAL,
         target="http://127.0.0.1:5055/login",
-        run_id="adccddf2b6e5",
+        run_id="idc6c0778a1d81",
         model="gemini-3.6-flash",
         capability_id="open-subaccount-escalation-test",
         policy=policy,
@@ -1884,7 +1882,7 @@ def test_live_handoff_drains_and_persists_real_human_actions(tmp_path: Path) -> 
             "the legacy_bank fixture app is not reachable on 127.0.0.1:5055; start it with "
             "`.venv/Scripts/python.exe -m fixtures.legacy_bank` before running this test"
         )
-    from understudy.surface.web import WebSurface
+    from understudy.surface.web import _HUMAN_ACTION_SUPPRESSED, WebSurface
 
     policy = load_policy(POLICY_PATH)
     try:
@@ -2001,10 +1999,15 @@ def test_live_handoff_drains_and_persists_real_human_actions(tmp_path: Path) -> 
     assert record.resolution is not None
     stored_actions = record.resolution.human_actions
     assert stored_actions, "the stored resolution's human_actions must be non-empty"
+    # Phase 13 (A1): the password field's own value is never captured, at the source -- the
+    # human's typed text ("a-human-typed-this") must never appear, and the input EVENT on that
+    # field is still present, carrying the suppression sentinel (the action is recorded; only the
+    # value is not).
     assert any(
-        a.kind == "input" and a.role == "textbox" and a.value == "a-human-typed-this"
+        a.kind == "input" and a.role == "textbox" and a.value == _HUMAN_ACTION_SUPPRESSED
         for a in stored_actions
     )
+    assert not any(a.value == "a-human-typed-this" for a in stored_actions)
     assert any(a.kind == "click" and a.role == "button" for a in stored_actions)
     # H2: the AGENT's own earlier typing must not have survived the discard.
     assert not any(a.value == "agent-typed-this" for a in stored_actions)
@@ -2032,7 +2035,7 @@ def test_live_escalate_drains_and_persists_human_actions_through_the_real_call(
             "the legacy_bank fixture app is not reachable on 127.0.0.1:5055; start it with "
             "`.venv/Scripts/python.exe -m fixtures.legacy_bank` before running this test"
         )
-    from understudy.surface.web import WebSurface
+    from understudy.surface.web import _HUMAN_ACTION_SUPPRESSED, WebSurface
 
     policy = load_policy(POLICY_PATH)
     try:
@@ -2127,10 +2130,15 @@ def test_live_escalate_drains_and_persists_human_actions_through_the_real_call(
     assert record.resolution is not None
     stored_actions = record.resolution.human_actions
     assert stored_actions, "the stored resolution's human_actions must be non-empty"
+    # Phase 13 (A1): the password field's own value is never captured, at the source -- the
+    # human's typed text ("a-human-typed-this") must never appear, and the input EVENT on that
+    # field is still present, carrying the suppression sentinel (the action is recorded; only the
+    # value is not).
     assert any(
-        a.kind == "input" and a.role == "textbox" and a.value == "a-human-typed-this"
+        a.kind == "input" and a.role == "textbox" and a.value == _HUMAN_ACTION_SUPPRESSED
         for a in stored_actions
     )
+    assert not any(a.value == "a-human-typed-this" for a in stored_actions)
     assert any(a.kind == "click" and a.role == "button" for a in stored_actions)
     # The discard window: the AGENT's own earlier typing must not have survived it.
     assert not any(a.value == "agent-typed-this" for a in stored_actions)

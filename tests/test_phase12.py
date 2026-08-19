@@ -661,9 +661,7 @@ _BALANCE_POLICY_PATH = Path(__file__).resolve().parent.parent / "policies" / "le
 _TENANT_B_POLICY_PATH = (
     Path(__file__).resolve().parent.parent / "policies" / "legacy_bank_tenant_b.yaml"
 )
-_BALANCE_EVIDENCE_DIR = (
-    Path(__file__).resolve().parent.parent / "evidence" / "discovery-b2405e162ba4"
-)
+_BALANCE_EVIDENCE_DIR = Path(__file__).resolve().parent.parent / "evidence" / "discovery"
 _BALANCE_GOAL = "look up member 12345 and read their current savings balance"
 _BALANCE_CAPABILITY_ID = "look-up-member-12345-and-read-their-current-savings-balance"
 

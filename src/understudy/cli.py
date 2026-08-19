@@ -80,10 +80,11 @@ def _policy_exception_message(exc: EscalationRequired | NavigationBlocked | Poli
 
 def _write_error_result(logger: EvidenceLogger, exc: BaseException) -> None:
     """D7: whatever kind of death `discover` suffers, it leaves a `result.json` behind, not just
-    a stack trace -- `evidence/discovery-a3a4a2fc6000` (two events, no terminal record at all) is
-    exactly the failure mode this closes. Goes through the same Redactor every other write does
-    (ARCHITECTURE.md decision 10); not built through `EvidenceLogger.write_result`, which requires
-    a `BaseModel`, because there is no ReplayResult-shaped model for a discovery-time death.
+    a stack trace -- a real discovery run was once measured to end with only two events and no
+    terminal record at all, and that is exactly the failure mode this closes. Goes through the
+    same Redactor every other write does (ARCHITECTURE.md decision 10); not built through
+    `EvidenceLogger.write_result`, which requires a `BaseModel`, because there is no
+    ReplayResult-shaped model for a discovery-time death.
     """
     payload = {"status": "error", "error": type(exc).__name__, "reason": str(exc)}
     (logger.dir / "result.json").write_text(
@@ -107,10 +108,11 @@ def _discover_and_capture(
 ) -> RunOutcome:
     """D7: however `run()` dies -- a Gemini API error, a policy stop, or anything else entirely
     unexpected -- a terminal `run_end` event and a `result.json` exist before the exception
-    propagates. `evidence/discovery-a3a4a2fc6000` (two events, no terminal record at all) is
-    exactly the failure mode this closes: it died inside `llm.complete()` with no handler for
-    that at all. Extracted from `discover()` (the typer command) so this failure-handling
-    machinery is directly testable against fakes, with no real browser and no network required.
+    propagates. A real discovery run was once measured to die inside `llm.complete()` with no
+    handler for that at all, leaving behind only two events and no terminal record -- exactly the
+    failure mode this closes. Extracted from `discover()` (the typer command) so this
+    failure-handling machinery is directly testable against fakes, with no real browser and no
+    network required.
     A run that completes (including one whose OWN stopping condition already logged its own
     `run_end`, e.g. `max_steps`) never reaches the `except` below at all.
     """

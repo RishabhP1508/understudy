@@ -1,4 +1,11 @@
 ## Phase 10 Verification Report
+
+> Update, Phase 13: this report names intervention `escb4e73c2bb2` throughout, which was the handoff
+> record produced here. Phase 13 fixed the plaintext-password capture this report flagged in its own
+> caveats, and the handoff was then re-recorded against the fix. That record is gone from `evidence/`;
+> the current one is `evidence/escalation/escc59ee3e456.json`, same flow, password entries suppressed
+> at capture. Everything below is left as it was measured at the time.
+
 Status: COMPLETE. Thirteen of the fourteen definition-of-done items are met, including the three
 that required a person at the keyboard, which the user has now driven by hand. The fourteenth
 (DoD 5's live half) is recorded as a documented limit of this fixture rather than as a gap: see
