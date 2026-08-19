@@ -8,13 +8,12 @@ no model anywhere in the decision loop.
 
 ## Setup
 
-Requires Python 3.11, pinned deliberately: the machine default on a recent install is often newer,
-and part of this stack does not have wheels for it yet (`docs/adr/0001`). If `python --version`
-reports anything other than 3.11.x, install 3.11 separately and point the venv creation step at it.
+Requires Python 3.11, pinned deliberately: the machine default on a recent install is often newer, and part of this stack does not have wheels for it yet (docs/adr/0001). Which command reaches 3.11 depends on how it was installed; run py -0 on Windows or python3.11 --version anywhere to see which of the three below applies. If python --version reports anything other than 3.11.x, install 3.11 separately and point the venv creation step at it.
 
 ```bash
-py -3.11 -m venv .venv                     # Windows
-# python3.11 -m venv .venv                 # Linux/macOS
+python3.11 -m venv .venv                   # if `python3.11` is on your PATH
+# py -3.11 -m venv .venv                   # Windows, if 3.11 is registered with the py launcher
+# python3 -m venv .venv                    # if python3 already reports 3.11.x
 .venv/Scripts/pip install -e ".[dev]"      # Windows
 # .venv/bin/pip install -e ".[dev]"        # Linux/macOS
 .venv/Scripts/playwright install chromium  # Windows
@@ -272,6 +271,10 @@ overlay deliberately leaves undeclared (`REPORT.md`, Heterogeneity & multi-tenan
 worth reading first: the subaccount capability's own discovery, which could not have completed
 without the escalation in the demo path above, and a session-expiry replay that a human resolved
 by logging back in on the same live browser session.
+`artifacts/` holds every recorded version, not just the newest: v1 to v3 of the balance capability
+and v1 to v2 of the subaccount one. Versions accumulate because `discover` writes a new file rather
+than overwriting, after an early run destroyed a genuine discovery recording (`docs/adr/0011`). The
+demo path and REPORT cite the newest of each.
 
 ## What is real and what is mocked
 
