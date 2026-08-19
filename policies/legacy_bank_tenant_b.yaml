@@ -1,0 +1,69 @@
+# Policy for the legacy_bank fixture's tenant B variant (NorthBay Credit Union) -- the SAME
+# vendor product as legacy_bank.yaml, running for a different tenant, under /tenantb. Loaded
+# into a typed Policy (safety/policy.py) via load_policy(). A tenant does not get a looser
+# policy than tenant A: every limit and every sensitive-field/forbidden-text rule below is
+# identical to legacy_bank.yaml, and only the app identity, entry point, and routes differ.
+
+version: 1
+app_id: legacy_bank__tenant_b
+entry_point: http://127.0.0.1:5055/tenantb/login
+
+# Origin match is exact (scheme://netloc). Route match is fnmatch against the URL PATH only
+# (never the query string), and "*" crosses "/", so "/tenantb/customer/*" also covers
+# "/tenantb/customer/12345/linked-account/review" -- there is no separate wildcard for "one
+# segment" (same rule as legacy_bank.yaml's own "/member/*").
+allowed_origins:
+  - http://127.0.0.1:5055
+allowed_routes:
+  - /tenantb/login
+  - /tenantb/app
+  - /tenantb/nav
+  - /tenantb/customers
+  - /tenantb/customer/*
+  - /external
+
+# /external is deliberately allowed here too, for the same reason as legacy_bank.yaml: it is
+# the origin guard, not the route list, that stops the escape to https://example.com.
+#
+# /admin/inject is deliberately NOT listed: it is the fixture's own failure-injection control,
+# driven directly against the Flask app by tests, never through the agent's surface.
+
+allowed_actions: [navigate, click, type, select, read_text]
+
+# Enforced for state-changing actions only (click/type/select/key). read_text is exempt.
+allowed_roles: [textbox, searchbox, combobox, button, link, checkbox, radio, option]
+
+# Label-based risk heuristic (safety/risk.py): a click on a button/link whose accessible name
+# matches one of these (case-insensitive) is RISKY_IRREVERSIBLE.
+risky_labels: [transfer, delete, approve, submit payment, close account, wire]
+
+# Second layer behind risky_labels. Tenant B's linked-account flow spans two mutating POSTs,
+# not one: "Continue" submits the entered values, and the review screen's own "Confirm" is
+# what actually creates the account -- neither control is named anything risky_labels would
+# catch, so both routes are listed and both clicks classify RISKY_IRREVERSIBLE.
+mutating_routes:
+  - /tenantb/customer/*/linked-account/new
+  - /tenantb/customer/*/linked-account/review
+
+sensitive_fields:
+  secret: [password, passwd, pin, token, secret, api_key, apikey]
+  pii: [ssn, social security, date of birth, dob, card number, account number, email, phone]
+
+max_steps: 25
+max_wall_clock_seconds: 180
+max_action_retries: 2
+
+# Shared threshold for the discovery loop's three stall-style stopping conditions: no_progress,
+# loop_detected, dead_end.
+stall_limit: 3
+
+# How often a discovery turn gets an unconditional full accessibility-tree render, even when the
+# observation digest says a diff would otherwise be safe to send instead.
+full_render_every: 5
+
+# Regexes the agent's typed text must not match: an SSN, a payment card number, a PEM private
+# key header. Matched with re.search against the literal text of a Type action.
+forbidden_text_patterns:
+  - "\\b\\d{3}-\\d{2}-\\d{4}\\b"
+  - "\\b(?:\\d[ -]?){13,19}\\b"
+  - "-----BEGIN(?: RSA)? PRIVATE KEY-----"

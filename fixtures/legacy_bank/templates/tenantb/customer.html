@@ -1,0 +1,20 @@
+<html>
+<head><title>NorthBay CU :: Customer Detail</title></head>
+<body bgcolor="#eef2f6">
+<table class="nb-outer" border="0" cellpadding="0" cellspacing="0"><tr><td class="nb-wrap">
+<table class="nb1" border="1" cellpadding="0" cellspacing="0"><tr><td class="nb2">
+<table class="nb3" border="1" cellpadding="4" cellspacing="0"><tr><td class="nb4">
+<table class="nb5" border="0" cellpadding="2" cellspacing="0">
+<tr><td class="nb6"><font size="2">Customer ID</font></td><td class="nb7"><font size="2">{{ member.id }}</font></td></tr>
+<tr><td class="nb6"><font size="2">Name</font></td><td class="nb7"><font size="2">{{ member.name }}</font></td></tr>
+<tr><td class="nb6"><font size="2">Status</font></td><td class="nb7"><font size="2">{{ member.status }}</font></td></tr>
+<tr><td class="nb6"><font size="2">Savings Balance</font></td><td class="nb7">
+<iframe src="/tenantb/customer/{{ member.id }}/balance" width="200" height="30" frameborder="0"></iframe>
+</td></tr>
+</table>
+</td></tr></table>
+</td></tr></table>
+</td></tr></table>
+<center><a href="/tenantb/customer/{{ member.id }}/linked-account/new">Open Linked Account</a></center>
+</body>
+</html>

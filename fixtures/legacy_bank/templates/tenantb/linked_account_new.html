@@ -1,0 +1,22 @@
+<html>
+<head><title>NorthBay CU :: New Linked Account</title></head>
+<body bgcolor="#eef2f6">
+<table class="nb-outer" border="0" cellpadding="0" cellspacing="0"><tr><td class="nb-wrap">
+<table class="nb1" border="1" cellpadding="0" cellspacing="0"><tr><td class="nb2">
+<table class="nb3" border="1" cellpadding="4" cellspacing="0"><tr><td class="nb4">
+<form method="post" action="/tenantb/customer/{{ cid }}/linked-account/new">
+<table class="nb5" border="0" cellpadding="2" cellspacing="0">
+<tr><td class="nb6"><font size="2">Nickname</font></td><td class="nb7">
+<input type="text" name="nick" value="{{ nickname }}"></td></tr>
+<tr><td class="nb6"><font size="2">Opening Deposit</font></td><td class="nb7">
+<input type="text" name="dep" value="{{ deposit }}">
+{% if deposit_error %}<font color="red">{{ deposit_error }}</font>{% endif %}
+</td></tr>
+<tr><td class="nb8" colspan="2"><input type="button" value="Continue" onclick="this.form.submit()"></td></tr>
+</table>
+</form>
+</td></tr></table>
+</td></tr></table>
+</td></tr></table>
+</body>
+</html>

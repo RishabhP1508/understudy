@@ -498,3 +498,74 @@ raises an error instead of going quietly dormant.
     seconds by `catalog`'s own CLI default, well under `discover`/`replay`'s 900s, because an MCP
     `call_tool` is a synchronous request a calling agent is blocked on. See docs/adr/0017's TTL
     tradeoff.
+
+## Phase 12 decisions
+
+91. A `TenantOverlay` (models/artifact.py) is a small, separately-authored, separately-versioned
+    document, never a second recording. `resolve_for_tenant(capability, overlay)` returns a NEW
+    `Capability` -- the base capability, and every `Step`/`Checkpoint`/`TargetDescriptor` it owns,
+    is never mutated -- and that result is NEVER written to `artifacts/`; it is built fresh, in
+    memory, immediately before replay. Why: R7 asks how one recording is reused, or safely
+    specialized, across tenants rather than re-recorded per tenant, and a recording that changes
+    shape depending on who last replayed it against which tenant would defeat the one thing an
+    artifact is supposed to guarantee -- what a reviewer signed off on is what replays. See
+    `docs/adr/0018`.
+92. `vocabulary_map` is ONE substitution table, not separate label/route/checkpoint fields,
+    applied as a single compiled-regex pass (longest key first) across a descriptor's name, its
+    relational label, its frame_path segments, and every Checkpoint value a step or the
+    capability's own success checkpoint carries. Why one table: a renamed label and a renamed
+    route are the same fact -- this tenant calls it something else -- and splitting that fact into
+    two fields is two places it can drift out of sync with itself. Why single-pass, specifically:
+    a sequential `str.replace` loop over the same dict can chase a lone rename through a SECOND
+    key's own replacement text (`{"AA": "B", "B": "C"}` turning "AA" into "C"); one `re.sub` call
+    scans the original string once and never rescans what it has just written. See `docs/adr/0018`.
+93. `step_overrides` (keyed by step id, a full literal field replacement) and `extra_steps` (a
+    whole additional Step inserted after a named step id) exist because wording alone cannot
+    express a tenant that genuinely reshaped the workflow -- tenant B's own linked-account flow
+    inserts a review-and-confirm screen tenant A does not have. `resolve_for_tenant` validates an
+    override cannot name a step id that does not exist, cannot change a step's own action type,
+    and an extra step cannot be inserted after a step id that does not exist -- each a typed
+    `OverlayError` naming the offender, the same shape `replay/outcomes.py`'s `UnknownDetector`
+    already uses. `index` is renumbered after every insertion; `id` is never touched. See
+    `docs/adr/0018`.
+94. The shipped `overlays/tenant_b.json` deliberately leaves two of tenant B's own real renames
+    ("Username" -> "User ID", "Initial Deposit" -> "Opening Deposit") UNDECLARED, because both
+    descriptors carry a `role_ordinal` fallback that rescues them positionally (measured: rank 5
+    instead of the recorded rank 1) with no overlay entry needed at all. Why leave them out on
+    purpose: an overlay that "fixed" every rename regardless of whether the locator needed it
+    would hide that the ranked locator strategy is doing real work, which is the property this
+    whole submission is graded hardest on. The drift is still visible, not silent: a
+    `locator_drift` event fires for both steps, and `understudy drift` reports it.
+95. The same-step-many-tenants-vs-one-tenant-alone distinction is the interpretation this project
+    commits to for R7's drift question: the SAME step degrading the SAME way across MANY tenants
+    of one vendor product means the vendor shipped a new version (the fix likely belongs in the
+    base recording or the overlay mechanism itself, not repeated per tenant); ONE tenant
+    degrading ALONE, with siblings still resolving cleanly, means a local configuration change at
+    that one tenant -- exactly what one overlay exists to absorb without touching anyone else's.
+    `understudy drift` (evidence/drift.py) is what makes the two distinguishable in practice: a
+    plain-text report of rank and drift clause per run, per step. See `docs/adr/0018`.
+96. `app_fingerprint` (models/observation.py) hashes the entry screen's STRUCTURAL signature only
+    (frame count, a role:count map over interactive roles, title/heading text) -- deliberately
+    never label text, so a tenant's own vocabulary rename never itself registers as a mismatch.
+    Captured once, from the FIRST observation after navigating to the target (`agent/loop.py`),
+    carried onto `TargetApp.app_fingerprint` by `record/recorder.py`, and recomputed at replay
+    time (`replay/engine.py`) purely as a drift SIGNAL: a mismatch logs an event naming both
+    values, an absent baseline logs that there is nothing to compare, and neither ever changes the
+    result kind -- the same non-gating stance `PERCEPTION_VERSION` already takes (decision 53),
+    for the same reason: the two capabilities already in `artifacts/` predate this field and must
+    keep replaying. `understudy fingerprint --artifact PATH` is the human-run adoption path for
+    those two, the same shape as `understudy approve`. See `docs/adr/0018`.
+97. `_drift_reason` (replay/engine.py) returns every applicable clause, joined with `"+"`, in the
+    existing precedence order -- not the first match. Why: on tenant B, a descriptor that carries
+    a `recorded_rank` both regresses in rank AND stops matching by name, and reporting only the
+    rank regression hides the fact that the recorded name stopped matching at all, which is the
+    whole tenant-vocabulary case this phase exists to surface. A resolution where only one clause
+    applies still returns that one clause alone, unchanged from before. See `docs/adr/0018`.
+98. `_build_step_context()` (replay/engine.py) adds `resolution_strategy`/`actual_rank`/
+    `recorded_rank` to the context every dispatched, target-resolving step passes to
+    `PolicyGate.dispatch` -- not only a step that drifted. Why: a `locator_drift` event only
+    exists for a step whose resolution was weaker than recorded, so without this there is no
+    per-step rank signal at all for a step that resolved exactly as expected, and a rank
+    distribution (`understudy drift`) needs a denominator, not only its own numerator. A run
+    recorded before this phase carries neither key at all; `evidence/drift.py` counts and names
+    those as "no rank data", never imputing a rank the run never measured. See `docs/adr/0018`.

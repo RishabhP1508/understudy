@@ -30,7 +30,7 @@ from understudy.evidence.logger import EvidenceLogger
 from understudy.llm.base import LLMClient
 from understudy.models.artifact import Checkpoint, checkpoint_satisfied
 from understudy.models.intervention import InterventionRequest, InterventionResolution, ReasonCode
-from understudy.models.observation import Observation, UIElement
+from understudy.models.observation import Observation, UIElement, app_fingerprint
 from understudy.safety.policy import (
     EscalationRequired,
     NavigationBlocked,
@@ -355,8 +355,13 @@ def run(
     # No pre-navigation observation exists to protect (the browser starts blank), so the
     # bootstrap step observes once, immediately after the navigate completes, and uses that
     # fresh observation for its own screenshot -- there is no "before" for the very first action,
-    # only an "after" (the same "observe, then screenshot" order as every round below).
-    _screenshot_safely(logger, surface, rounds, "after", surface.observe())
+    # only an "after" (the same "observe, then screenshot" order as every round below). The SAME
+    # observation also seeds this run's app_fingerprint event (Phase 12): a vendor-version drift
+    # signal record/recorder.py carries onto TargetApp.app_fingerprint, computed from the entry
+    # screen and nowhere else, so a later step's own page churn never overwrites it.
+    first_observation = surface.observe()
+    logger.event("app_fingerprint", fingerprint=app_fingerprint(first_observation))
+    _screenshot_safely(logger, surface, rounds, "after", first_observation)
 
     while True:
         if rounds >= max_steps:

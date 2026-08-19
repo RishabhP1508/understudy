@@ -28,6 +28,7 @@ docs/adr/0009), never as a pre-flight gate.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Literal
 from urllib.parse import urlsplit
 
@@ -360,3 +361,227 @@ class Capability(BaseModel):
         if required:
             schema["required"] = required
         return schema
+
+
+# --------------------------------------------------------------------------------------
+# Phase 12: tenant overlays. A recorded Capability targets ONE tenant's rendering of a vendor
+# product; a TenantOverlay is a separate, small, human-authored document that reconciles it
+# against a DIFFERENT tenant of the same product -- a vocabulary substitution for renamed labels
+# and routes, plus a handful of explicit step overrides and insertions for the places wording
+# alone cannot bridge (a workflow step this tenant genuinely inserts). `resolve_for_tenant` is the
+# only consumer; its output is a Capability like any other, built at INVOKE time and NEVER
+# written to disk as a recorded artifact -- an overlay is reviewed and versioned on its own, not
+# baked back into someone else's recording.
+# --------------------------------------------------------------------------------------
+
+
+class OverlayError(ValueError):
+    """Raised by resolve_for_tenant() when an overlay disagrees with the capability it targets: a
+    step id that does not exist, an attempt to change a step's action type, an after_step_id with
+    nothing to insert after, or a capability_id/version mismatch. Always names the offending step
+    id or field in its message, the same shape as replay/outcomes.py's UnknownDetector."""
+
+
+class StepOverride(BaseModel):
+    """A partial, per-step replacement for one recorded Step, keyed by that step's own `id` in
+    TenantOverlay.step_overrides. Every field defaults to "not set" (Pydantic's own
+    `model_fields_set`, not a sentinel value), so only the fields an overlay actually names are
+    applied; `resolve_for_tenant` copies them onto the base Step verbatim, with NO further
+    vocabulary substitution -- an override's own values are already this tenant's literal truth,
+    authored by a human who read the base capability and this tenant's screen side by side.
+
+    `action` exists for VALIDATION only (it must equal the base step's own action, or
+    resolve_for_tenant refuses): an override can reshape what a step asserts or targets, never
+    what KIND of action it performs -- that would silently turn a `type` step into a `click`.
+    """
+
+    action: str | None = None
+    target: TargetDescriptor | None = None
+    value: str | int | float | bool | ParamRef | None = None
+    precondition: Checkpoint | None = None
+    postcondition: Checkpoint | None = None
+    risk_class: str | None = None
+    rationale: str | None = None
+    on_failure: Literal["dismiss", "dismiss_dialog", "retry", "reauth", "wait"] | None = None
+
+
+class ExtraStep(BaseModel):
+    """A whole additional Step this tenant's flow needs that the base recording never went
+    through (e.g. an extra confirmation screen). `after_step_id` names the BASE capability's own
+    step id to insert after; `resolve_for_tenant` renumbers every step's `index` once every
+    override and insertion has been applied, so `step.id` here only needs to be unique, never
+    sequential with the base capability's own ids."""
+
+    after_step_id: str
+    step: Step
+
+
+class TenantOverlay(BaseModel):
+    """A small, reviewable document reconciling one recorded Capability against a DIFFERENT
+    tenant of the same vendor product (R7): which vocabulary this tenant renamed, which steps
+    needed a genuinely different assertion, and which steps this tenant's own flow inserts.
+    `resolve_for_tenant` is the only consumer; the result is a Capability like any other, built at
+    invoke time, never itself written to artifacts/.
+    """
+
+    tenant_id: str
+    base_capability_id: str
+    base_version: int
+    entry_point_override: str | None = None
+    # Applied as ONE substitution pass, longest key first (see _vocabulary_substituter): a
+    # renamed label, a renamed route segment, and a renamed query parameter are all the SAME kind
+    # of fact -- this tenant calls it something else -- told once in this one table, rather than
+    # split across a label field and a separate route field that could disagree about the same
+    # rename.
+    vocabulary_map: dict[str, str] = Field(default_factory=dict)
+    step_overrides: dict[str, StepOverride] = Field(default_factory=dict)
+    extra_steps: list[ExtraStep] = Field(default_factory=list)
+    notes: str = ""
+
+
+def _vocabulary_substituter(vocabulary_map: dict[str, str]) -> Any:
+    """One compiled alternation, longest key first, so a replacement's OWN output can never be
+    re-matched by a shorter key later in the same table: `re.sub` scans the ORIGINAL string once,
+    left to right, and never rescans text it has just written -- a single pass by construction,
+    not a rule this function has to separately enforce. Sorting keys longest-first also means the
+    longest applicable key wins at any one position, never a shorter key that happens to be a
+    prefix of it.
+    """
+    if not vocabulary_map:
+        return lambda text: text
+    ordered = sorted(vocabulary_map, key=len, reverse=True)
+    pattern = re.compile("|".join(re.escape(key) for key in ordered))
+    return lambda text: pattern.sub(lambda match: vocabulary_map[match.group(0)], text)
+
+
+def _apply_vocabulary_to_target(target: TargetDescriptor, substitute: Any) -> TargetDescriptor:
+    updates: dict[str, Any] = {}
+    new_name = substitute(target.name)
+    if new_name != target.name:
+        updates["name"] = new_name
+    new_frame_path = [substitute(segment) for segment in target.frame_path]
+    if new_frame_path != target.frame_path:
+        updates["frame_path"] = new_frame_path
+    if target.relational is not None:
+        new_label = substitute(target.relational.label)
+        if new_label != target.relational.label:
+            updates["relational"] = target.relational.model_copy(update={"label": new_label})
+    if not updates:
+        return target
+    return target.model_copy(update=updates)
+
+
+def _apply_vocabulary_to_checkpoint(checkpoint: Checkpoint, substitute: Any) -> Checkpoint:
+    new_value = substitute(checkpoint.value)
+    if new_value == checkpoint.value:
+        return checkpoint
+    return checkpoint.model_copy(update={"value": new_value})
+
+
+def _apply_vocabulary_to_step(step: Step, substitute: Any) -> Step:
+    updates: dict[str, Any] = {}
+    if step.target is not None:
+        new_target = _apply_vocabulary_to_target(step.target, substitute)
+        if new_target is not step.target:
+            updates["target"] = new_target
+    if step.precondition is not None:
+        new_pre = _apply_vocabulary_to_checkpoint(step.precondition, substitute)
+        if new_pre is not step.precondition:
+            updates["precondition"] = new_pre
+    if step.postcondition is not None:
+        new_post = _apply_vocabulary_to_checkpoint(step.postcondition, substitute)
+        if new_post is not step.postcondition:
+            updates["postcondition"] = new_post
+    if not updates:
+        return step
+    return step.model_copy(update=updates)
+
+
+def resolve_for_tenant(capability: Capability, overlay: TenantOverlay) -> Capability:
+    """Apply `overlay` to `capability`, returning a NEW Capability -- `capability` itself, and
+    every Step/Checkpoint/TargetDescriptor it holds, is never mutated. Meant to be called at
+    invoke time, immediately before replay; the result is never written to artifacts/ (it is not
+    a new recording, it is the same recording read through a tenant's own dictionary).
+
+    Order: (1) validate the overlay actually targets this capability and names only real steps;
+    (2) substitute vocabulary across every step's target/checkpoints and the capability's own
+    success checkpoint; (3) apply step_overrides (a full, literal field replacement -- no further
+    substitution); (4) insert extra_steps after their named step; (5) renumber `index` (never
+    `id`) across the final step list.
+    """
+    if overlay.base_capability_id != capability.capability_id:
+        raise OverlayError(
+            f"overlay base_capability_id {overlay.base_capability_id!r} does not match this "
+            f"capability's capability_id {capability.capability_id!r}"
+        )
+    if overlay.base_version != capability.version:
+        raise OverlayError(
+            f"overlay base_version {overlay.base_version} does not match this capability's "
+            f"version {capability.version}"
+        )
+
+    steps_by_id = {step.id: step for step in capability.steps}
+    for step_id, declared_override in overlay.step_overrides.items():
+        base_step = steps_by_id.get(step_id)
+        if base_step is None:
+            raise OverlayError(
+                f"step_overrides names step id {step_id!r}, which does not exist in this "
+                "capability"
+            )
+        if declared_override.action is not None and declared_override.action != base_step.action:
+            raise OverlayError(
+                f"step_overrides for step {step_id!r} would change its action from "
+                f"{base_step.action!r} to {declared_override.action!r}, which is not allowed"
+            )
+    for extra in overlay.extra_steps:
+        if extra.after_step_id not in steps_by_id:
+            raise OverlayError(
+                f"extra_steps names after_step_id {extra.after_step_id!r}, which does not exist "
+                "in this capability"
+            )
+
+    substitute = _vocabulary_substituter(overlay.vocabulary_map)
+    new_steps = [_apply_vocabulary_to_step(step, substitute) for step in capability.steps]
+
+    if overlay.step_overrides:
+        overridden: list[Step] = []
+        for step in new_steps:
+            override = overlay.step_overrides.get(step.id)
+            if override is None:
+                overridden.append(step)
+                continue
+            # Live attribute values (a TargetDescriptor/Checkpoint/ParamRef instance), never a
+            # `model_dump()`'d plain dict -- `Step.model_copy(update=...)` assigns straight into
+            # the model with no revalidation, so a dumped dict here would silently leave
+            # `step.target` holding a plain dict instead of a TargetDescriptor.
+            fields = {
+                name: getattr(override, name)
+                for name in override.model_fields_set
+                if name != "action"
+            }
+            overridden.append(step.model_copy(update=fields) if fields else step)
+        new_steps = overridden
+
+    if overlay.extra_steps:
+        extra_by_after: dict[str, list[Step]] = {}
+        for extra in overlay.extra_steps:
+            extra_by_after.setdefault(extra.after_step_id, []).append(extra.step)
+        expanded: list[Step] = []
+        for step in new_steps:
+            expanded.append(step)
+            expanded.extend(extra_by_after.get(step.id, []))
+        new_steps = expanded
+
+    new_steps = [
+        step.model_copy(update={"index": position}) for position, step in enumerate(new_steps)
+    ]
+
+    new_success = _apply_vocabulary_to_checkpoint(capability.success, substitute)
+    target_updates: dict[str, Any] = {"tenant_id": overlay.tenant_id}
+    if overlay.entry_point_override is not None:
+        target_updates["entry_point"] = overlay.entry_point_override
+    new_target = capability.target.model_copy(update=target_updates)
+
+    return capability.model_copy(
+        update={"steps": new_steps, "success": new_success, "target": new_target}
+    )
