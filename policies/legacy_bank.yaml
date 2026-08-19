@@ -49,7 +49,6 @@ sensitive_fields:
 
 max_steps: 25
 max_wall_clock_seconds: 180
-max_action_retries: 2
 
 # Shared threshold for the discovery loop's three stall-style stopping conditions: no_progress
 # (actions dispatch, the page does not move), loop_detected (the same tool+target repeats), and

@@ -92,12 +92,27 @@ def analyze_run(run_dir: Path) -> RunDriftReport:
 
 
 def analyze_evidence_dir(evidence_dir: Path) -> list[RunDriftReport]:
+    """Find every run.jsonl at ANY depth under evidence_dir, not just one level deep -- Phase 13's
+    curation nested some runs a second level (evidence/cross-tenant/tenant-a/, .../tenant-b/,
+    evidence/catalog-invocation/*), and a one-level `iterdir()` silently missed all of them,
+    including the only two runs in the repository that carry locator drift.
+
+    A run's label is its path RELATIVE TO evidence_dir (POSIX-separated), not the bare leaf
+    directory name, so "cross-tenant/tenant-b" is distinguishable from a hypothetical top-level
+    "tenant-b" rather than colliding with it. evidence_dir itself, if it directly holds a
+    run.jsonl, is labelled ".".
+    """
     if not evidence_dir.exists():
         return []
-    run_dirs = sorted(
-        p for p in evidence_dir.iterdir() if p.is_dir() and (p / "run.jsonl").exists()
-    )
-    return [analyze_run(run_dir) for run_dir in run_dirs]
+    run_files = sorted(evidence_dir.rglob("run.jsonl"))
+    reports = []
+    for run_file in run_files:
+        run_dir = run_file.parent
+        report = analyze_run(run_dir)
+        label = run_dir.relative_to(evidence_dir).as_posix()
+        report.run_dir = label if label else "."
+        reports.append(report)
+    return reports
 
 
 def render_report(reports: list[RunDriftReport]) -> str:

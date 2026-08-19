@@ -52,7 +52,6 @@ class Policy(BaseModel):
     sensitive_fields: dict[str, list[str]] = Field(default_factory=dict)
     max_steps: int = 25
     max_wall_clock_seconds: float = 180
-    max_action_retries: int = 2
     # Shared by agent/loop.py's three stall-style stopping conditions (no_progress,
     # loop_detected, dead_end): the same "how many times before we call it" question, not three
     # independently-tuned knobs. See docs/adr/0010.

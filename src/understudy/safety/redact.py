@@ -36,9 +36,10 @@ both directions at once, and neither fix is a special case for a particular sent
       limit: a credential-shaped literal that is ALSO purely alphabetic (no digits, no symbols --
       a real secret essentially never has this shape) is not caught by R3 alone (docs/adr/0008).
 
-`redact_model`/`_redact_value` additionally honour field-level sensitivity carried IN the data:
-a dict containing `"sensitivity": "secret"` has its `value`/`text` keys replaced with a parameter
-reference; `"sensitivity": "pii"` has them masked. This is what makes a serialized element safe
+`_redact_model_instance`/`_redact_value` additionally honour field-level sensitivity carried IN
+the data: a dict containing `"sensitivity": "secret"` has its `value`/`text` keys replaced with a
+parameter reference; `"sensitivity": "pii"` has them masked. This is what makes a serialized
+element safe
 with no keyword rule at all -- see docs/adr/0008.
 
 Phase 8 (D4, docs/adr/0012) adds a second, independent mechanism on top of the above: R3 (the
@@ -308,9 +309,6 @@ class Redactor:
         for name in extra:
             result[name] = self._redact_any(dumped.get(name), value_carrying=True)
         return result
-
-    def redact_model(self, obj: BaseModel) -> dict[str, Any]:
-        return self._redact_model_instance(obj)
 
     def dumps(self, obj: Any, *, indent: int | None = None) -> str:
         if isinstance(obj, BaseModel):

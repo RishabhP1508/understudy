@@ -109,16 +109,6 @@ class Resolution(BaseModel):
     attempts: list[StrategyAttempt]
 
 
-class AmbiguousTarget(Exception):
-    """Not raised by resolve() (docs/adr/0006: an ambiguous rung is skipped, not a hard error).
-    Kept importable in case anything still catches it."""
-
-
-class TargetNotFound(Exception):
-    """Not raised by resolve(). A failed match is reported by returning element=None with the
-    full per-strategy attempts list (see Resolution), not by raising."""
-
-
 # --------------------------------------------------------------------------------------
 # pure helpers: name comparison, and rebuilding tree structure from an Observation alone
 # --------------------------------------------------------------------------------------
