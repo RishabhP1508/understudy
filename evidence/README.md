@@ -1,6 +1,6 @@
 # Evidence
 
-Every file here is the output of running the system. Nothing in this directory was written by hand.
+Every run directory here is the output of running the system. Nothing inside them was written by hand. This index is the exception, and the only file here that was.
 
 ## Read these two first
 
@@ -87,7 +87,7 @@ running, so every live test skips there. A green badge proves the offline half o
 It proves nothing about the browser automation, and none of the runs in this directory came from CI.
 
 Every artifact here was produced locally, against the fixture app on `127.0.0.1:5055`, with a headed
-browser. The full suite is 328 tests and passes with zero skips only when that fixture is running.
+browser. The full suite is 330 tests and passes with zero skips only when that fixture is running.
 
 ## Notes for reading these files
 

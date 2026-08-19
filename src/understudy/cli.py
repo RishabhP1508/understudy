@@ -385,7 +385,11 @@ def replay(
     UnknownDetector escaping replay() (a broken artifact naming a detector/trigger this build does
     not know, which is a request that was never valid, not a run that failed).
     """
-    parsed_params = json.loads(params)
+    try:
+        parsed_params = json.loads(params)
+    except json.JSONDecodeError as exc:
+        typer.echo(f"--params must be a JSON object: {exc}")
+        raise typer.Exit(2) from None
     capability = Capability.model_validate_json(artifact.read_text(encoding="utf-8"))
     if overlay is not None:
         # resolve_for_tenant's own result is never written to artifacts/ (models/artifact.py's
