@@ -20,7 +20,14 @@ from understudy.escalation.operator_app import create_app
 from understudy.escalation.store import InterventionStore
 from understudy.evidence.logger import EvidenceLogger
 from understudy.llm.base import LLMClient, build_llm
-from understudy.models.artifact import Capability, StabilitySignal
+from understudy.models.artifact import (
+    Capability,
+    OverlayError,
+    StabilitySignal,
+    TenantOverlay,
+    resolve_for_tenant,
+)
+from understudy.models.observation import app_fingerprint
 from understudy.models.result import FailureCategory, ReplayResult
 from understudy.record.recorder import build_capability
 from understudy.replay import engine as replay_engine
@@ -33,7 +40,7 @@ from understudy.safety.policy import (
     load_policy,
 )
 from understudy.safety.redact import Redactor, mint_safe_id
-from understudy.surface.base import Surface
+from understudy.surface.base import Navigate, Surface
 from understudy.surface.web import WebSurface
 
 app = typer.Typer(add_completion=False)
@@ -306,6 +313,16 @@ def replay(
     policy: Annotated[
         Path, typer.Option("--policy", help="path to the policy YAML")
     ] = Path("policies/legacy_bank.yaml"),
+    overlay: Annotated[
+        Path | None,
+        typer.Option(
+            "--overlay",
+            help=(
+                "a TenantOverlay JSON (e.g. overlays/tenant_b.json) to resolve the capability "
+                "against before replay -- see models/artifact.py's resolve_for_tenant"
+            ),
+        ),
+    ] = None,
     allow_risky: Annotated[
         bool,
         typer.Option(
@@ -367,6 +384,17 @@ def replay(
     not know, which is a request that was never valid, not a run that failed).
     """
     parsed_params = json.loads(params)
+    capability = Capability.model_validate_json(artifact.read_text(encoding="utf-8"))
+    if overlay is not None:
+        # resolve_for_tenant's own result is never written to artifacts/ (models/artifact.py's
+        # own docstring): it is applied here, in memory, immediately before replay.
+        overlay_obj = TenantOverlay.model_validate_json(overlay.read_text(encoding="utf-8"))
+        try:
+            capability = resolve_for_tenant(capability, overlay_obj)
+        except OverlayError as exc:
+            typer.echo(f"invalid overlay: {exc}")
+            raise typer.Exit(2) from None
+
     result: ReplayResult | None = None
     outcomes_seen: list[str] = []
     successes = 0
@@ -380,8 +408,8 @@ def replay(
         )
     try:
         for _run_index in range(repeat):
-            result = replay_engine.replay(
-                artifact,
+            result = replay_engine.replay_resolved(
+                capability,
                 parsed_params,
                 policy,
                 allow_risky=allow_risky,
@@ -401,16 +429,23 @@ def replay(
         # A read-only OBSERVATION of replay reliability, never a gate (models/artifact.py's
         # StabilitySignal docstring) -- rewritten through the one serialization path, never a
         # bare json.dump.
-        capability = Capability.model_validate_json(artifact.read_text(encoding="utf-8"))
         stability = StabilitySignal(
             runs=repeat,
             successes=successes,
             last_n_outcomes=outcomes_seen,
             computed_at=datetime.now(UTC).isoformat(),
         )
-        capability = capability.model_copy(update={"stability": stability})
-        artifact.write_text(Redactor().dumps(capability, indent=2), encoding="utf-8")
-        typer.echo(f"stability: {stability.model_dump_json()}")
+        if overlay is None:
+            stamped = capability.model_copy(update={"stability": stability})
+            artifact.write_text(Redactor().dumps(stamped, indent=2), encoding="utf-8")
+            typer.echo(f"stability: {stability.model_dump_json()}")
+        else:
+            # A tenant-resolved capability is never itself an artifact on disk (resolve_for_tenant's
+            # own docstring) -- writing its stability back into the BASE artifact would attribute
+            # this tenant's own reliability to the recording tenant's file.
+            typer.echo(
+                f"stability (not written back; --overlay was given): {stability.model_dump_json()}"
+            )
 
     if result.kind == "business_outcome":
         # Printed clearly, on its own lines, above the JSON -- a human reading the terminal must
@@ -591,6 +626,71 @@ def approve(
         f"approved {artifact} (capability_id={capability.capability_id!r}, "
         f"version={capability.version}): status draft -> approved"
     )
+
+
+@app.command()
+def fingerprint(
+    artifact: Annotated[
+        Path, typer.Option("--artifact", help="path to a capability artifact to update")
+    ],
+    policy: Annotated[
+        Path, typer.Option("--policy", help="path to the policy YAML")
+    ] = Path("policies/legacy_bank.yaml"),
+) -> None:
+    """Compute app_fingerprint (Phase 12, B3) for an artifact recorded before the field existed,
+    from a LIVE observation of its own entry point, and write it back through Redactor.
+
+    Human-run, out of band -- the same shape as `approve`. This is the adoption path for the
+    artifacts under artifacts/ recorded before this field existed: their own discovery evidence
+    carries no Observation snapshot for record/recorder.py to derive one from retroactively, so a
+    fresh, live observation of the app itself is the only honest source.
+    """
+    capability = Capability.model_validate_json(artifact.read_text(encoding="utf-8"))
+    policy_obj = load_policy(policy)
+    surface = WebSurface(policy=policy_obj, headless=False)
+    gate = PolicyGate(policy_obj, mode="replay")
+    try:
+        try:
+            gate.dispatch(
+                surface,
+                Navigate(url=capability.target.entry_point),
+                context={
+                    "tool": "navigate",
+                    "rationale": "open the entry point to compute app_fingerprint",
+                },
+            )
+            observation = surface.observe()
+        except (PolicyDenied, EscalationRequired, NavigationBlocked) as exc:
+            typer.echo(f"could not open {capability.target.entry_point!r}: {exc}")
+            raise typer.Exit(1) from None
+    finally:
+        surface.close()
+
+    new_fingerprint = app_fingerprint(observation)
+    old_fingerprint = capability.target.app_fingerprint
+    updated = capability.model_copy(
+        update={
+            "target": capability.target.model_copy(update={"app_fingerprint": new_fingerprint})
+        }
+    )
+    artifact.write_text(Redactor().dumps(updated, indent=2), encoding="utf-8")
+    typer.echo(f"app_fingerprint: {old_fingerprint!r} -> {new_fingerprint!r}")
+
+
+@app.command()
+def drift(
+    evidence_dir: Annotated[
+        Path, typer.Option("--evidence-dir", help="base directory of run evidence")
+    ] = Path("evidence"),
+) -> None:
+    """Report per-run, per-step locator rank and drift data across every run.jsonl under
+    --evidence-dir (Phase 12, B6) -- plain text, never a gate. A run recorded before B5 carries no
+    rank data on its own act events; this counts and names those honestly, never imputing a rank.
+    """
+    from understudy.evidence.drift import analyze_evidence_dir, render_report
+
+    reports = analyze_evidence_dir(evidence_dir)
+    typer.echo(render_report(reports))
 
 
 if __name__ == "__main__":

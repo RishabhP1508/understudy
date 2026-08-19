@@ -39,15 +39,25 @@ INJECT_MODES = {
     "app_error",
 }
 
-# /login and /admin/inject never take part in injection, so the fixture can never lock
-# the operator out of clearing a mode or logging back in.
-EXEMPT_PATHS = {"/login", "/admin/inject"}
+# /login, /tenantb/login, and /admin/inject never take part in injection, so the fixture can
+# never lock the operator out of clearing a mode or logging back in. Tenant B's own login has
+# to be listed by its own path: without it, an armed mode (e.g. "permission_denied") would
+# intercept the GET/POST to /tenantb/login itself, before tenant_b.login() ever runs its own
+# arm/clear logic, and an operator could never reach tenant B's login page at all.
+EXEMPT_PATHS = {"/login", "/tenantb/login", "/admin/inject"}
 
 
 def require_login(view: Any) -> Any:
     @wraps(view)
     def wrapped(*args: Any, **kwargs: Any) -> Any:
         if "user" not in session:
+            # Same tenant-routing fix as the session_expired injection branch below: every
+            # tenant B view is decorated with THIS SAME shared function (imported by
+            # tenant_b.py), so a bare `url_for("login")` here would land every logged-out
+            # tenant B request on tenant A's own login page. Route by blueprint, once, here --
+            # not per caller.
+            if request.blueprint == "tenantb":
+                return redirect(url_for("tenantb.login"))
             return redirect(url_for("login"))
         return view(*args, **kwargs)
 
@@ -100,6 +110,11 @@ def _dispatch_injection() -> Any:
 
     if mode == "session_expired":
         session.clear()
+        # Redirect to whichever tenant's own login the request was in -- not always tenant A's:
+        # a tenant B session that expires belongs on /tenantb/login, and sending it to /login
+        # instead would silently strand a tenant B run on the wrong tenant's screen.
+        if request.blueprint == "tenantb":
+            return redirect(url_for("tenantb.login"))
         return redirect(url_for("login"))
 
     if mode == "slow_load":
@@ -362,3 +377,15 @@ def subaccount_confirm(mid: str) -> Any:
 @app.route("/external")
 def external() -> Any:
     return redirect("https://example.com/")
+
+
+# ---------------------------------------------------------------------------------
+# Tenant B: NorthBay Credit Union, a second tenant of this same vendor product, under
+# /tenantb. Imported at the bottom of this module (not the top) because tenant_b.py imports
+# MEMBERS/INJECT_MODES/_get_member_or_response/_parse_money/require_login back from this
+# module -- by the time this line runs, every one of those names is already defined above.
+# ---------------------------------------------------------------------------------
+
+from fixtures.legacy_bank.tenant_b import bp as _tenant_b_bp  # noqa: E402
+
+app.register_blueprint(_tenant_b_bp)

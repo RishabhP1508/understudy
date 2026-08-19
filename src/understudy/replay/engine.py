@@ -33,7 +33,12 @@ from understudy.models.artifact import (
     login_prefix_len,
 )
 from understudy.models.intervention import InterventionRequest, InterventionResolution, ReasonCode
-from understudy.models.observation import PERCEPTION_VERSION, Observation, UIElement
+from understudy.models.observation import (
+    PERCEPTION_VERSION,
+    Observation,
+    UIElement,
+    app_fingerprint,
+)
 from understudy.models.result import (
     BusinessOutcome,
     Escalated,
@@ -311,7 +316,13 @@ _DRIFT_NAME_STRATEGIES = frozenset(
 
 def _drift_reason(descriptor: TargetDescriptor, resolution: Resolution) -> str | None:
     """Both clauses below describe one concept: this target resolved on weaker evidence than it
-    was recorded with. Neither assumes a baseline that was never actually measured.
+    was recorded with. Neither assumes a baseline that was never actually measured, and BOTH can
+    apply to the same resolution at once -- on a tenant whose vocabulary renamed a field the
+    recorder also gave a positional fallback, the strategy that wins both ranks weaker AND stops
+    matching by name, and reporting only the first would hide the second, which is the whole
+    tenant-vocabulary case this phase exists to surface. Every applicable clause is returned,
+    joined with "+", in the precedence order below; a resolution where only one clause applies
+    still returns that one clause alone, unchanged from before this phase.
 
     Clause 1 ("rank_regressed"): `descriptor.recorded_rank` is not None (every capability built by
     the current recorder carries it) and the strategy that actually won this time ranks weaker
@@ -329,12 +340,13 @@ def _drift_reason(descriptor: TargetDescriptor, resolution: Resolution) -> str |
     time and matches nothing now is the definition of drift, and a descriptor carrying an ordinal
     or a relational hint would otherwise resolve POSITIONALLY in total silence without it.
     """
+    clauses: list[str] = []
     if descriptor.recorded_rank is not None and resolution.rank is not None:
         if drift_delta(descriptor.recorded_rank, resolution.rank) > 0:
-            return "rank_regressed"
+            clauses.append("rank_regressed")
     if descriptor.name and resolution.strategy_used not in _DRIFT_NAME_STRATEGIES:
-        return "name_no_longer_matched"
-    return None
+        clauses.append("name_no_longer_matched")
+    return "+".join(clauses) if clauses else None
 
 
 def _capture_failure_evidence(
@@ -622,6 +634,13 @@ def _make_reauth(
                         "to log back in after session loss"
                     ),
                     "step_id": step.index,
+                    "resolution_strategy": (
+                        resolution.strategy_used.value
+                        if resolution.strategy_used is not None
+                        else None
+                    ),
+                    "actual_rank": resolution.rank,
+                    "recorded_rank": target.recorded_rank,
                 },
                 element=resolution.element,
             )
@@ -685,6 +704,30 @@ def _run_step(
     # the postcondition check) can still describe THIS step by its actual, interpolated name.
     # Stays None for a navigate step (step.target is None), which `_describe_step` degrades for.
     interpolated_target: TargetDescriptor | None = None
+    # Set by (b) below the first time this step's target actually resolves; never reset on a
+    # later pass through the loop, same as `interpolated_target` above. `_build_step_context()`
+    # reads it so the SAME rank data (the strategy that actually won, its rank, and the rank this
+    # descriptor was recorded at) rides into every dispatch of this step's own action -- for every
+    # step that resolves a target, not only one that drifted (B5, Phase 12): a `locator_drift`
+    # event alone gives no signal for the steps that did NOT drift, and a rank distribution needs
+    # both.
+    resolution: Resolution | None = None
+
+    def _build_step_context() -> dict[str, Any]:
+        context: dict[str, Any] = {
+            "tool": step.action,
+            "rationale": step.rationale,
+            "step_id": step.index,
+        }
+        if resolution is not None:
+            context["resolution_strategy"] = (
+                resolution.strategy_used.value if resolution.strategy_used is not None else None
+            )
+            context["actual_rank"] = resolution.rank
+            context["recorded_rank"] = (
+                interpolated_target.recorded_rank if interpolated_target is not None else None
+            )
+        return context
 
     def _resume() -> HardFailure | BusinessOutcome | Escalated | tuple[Observation, str | None]:
         """RESUME IS NOT BLIND (task C2). Called once a human has taken control of THIS step and
@@ -860,11 +903,7 @@ def _run_step(
                 result_text = gate.dispatch(
                     surface,
                     action,
-                    context={
-                        "tool": step.action,
-                        "rationale": step.rationale,
-                        "step_id": step.index,
-                    },
+                    context=_build_step_context(),
                     element=element,
                 )
             except Exception as exc2:  # noqa: BLE001 - reported as a hard failure, never swallowed
@@ -970,11 +1009,7 @@ def _run_step(
                 result_text = gate.dispatch(
                     surface,
                     action,
-                    context={
-                        "tool": step.action,
-                        "rationale": step.rationale,
-                        "step_id": step.index,
-                    },
+                    context=_build_step_context(),
                     element=element,
                 )
             except PolicyDenied as exc:
@@ -1298,7 +1333,42 @@ def replay(
     intervention_store: InterventionStore | None = None,
     intervention_ttl_s: float = 900,
 ) -> ReplayResult:
+    """Thin wrapper: load the recorded artifact from disk, then hand off to replay_resolved()
+    below -- the one core every caller shares, including cli.py's `--overlay` path, which
+    resolves a TenantOverlay against an in-memory Capability (models/artifact.py's
+    resolve_for_tenant) and never writes the result back to disk.
+
+    Named `replay`, not `replay_capability`, because `catalog/server.py` imports this exact
+    function under the local alias `replay_capability` (`from understudy.replay.engine import
+    replay as replay_capability`) -- keeping the two names apart avoids a reader mistaking one
+    for the other.
+    """
     capability = Capability.model_validate_json(artifact_path.read_text(encoding="utf-8"))
+    return replay_resolved(
+        capability,
+        params,
+        policy_path,
+        allow_risky=allow_risky,
+        evidence_base_dir=evidence_base_dir,
+        intervention_store=intervention_store,
+        intervention_ttl_s=intervention_ttl_s,
+    )
+
+
+def replay_resolved(
+    capability: Capability,
+    params: dict[str, Any],
+    policy_path: Path,
+    allow_risky: bool = False,
+    evidence_base_dir: str | Path = "evidence",
+    intervention_store: InterventionStore | None = None,
+    intervention_ttl_s: float = 900,
+) -> ReplayResult:
+    """The core replay loop, over an ALREADY-RESOLVED, already-loaded Capability -- `replay()`
+    above is the only caller that reads one from disk. Splitting this out (Phase 12) is what lets
+    a tenant-resolved Capability (never itself a file under artifacts/) replay through the exact
+    same engine a recorded artifact does, with no second implementation to keep in sync.
+    """
     # ORDER OF OPERATIONS point 1: let UnknownDetector propagate UNCAUGHT. A capability naming a
     # detector or trigger this build does not know is a request that was never valid, not a run
     # that failed partway through -- there is no logger yet, on purpose, because there is nothing
@@ -1446,6 +1516,37 @@ def replay(
                 evidence_refs=refs,
             )
             return result
+
+        # Phase 12 (B3): a coarse vendor-version drift signal, recomputed from the entry screen
+        # and compared against what this artifact recorded. A mismatch WARNS -- it never changes
+        # the result kind and never gates replay, the same non-gating stance PERCEPTION_VERSION
+        # already takes. Best-effort: a failure here must never replace the real replay outcome
+        # with an unrelated exception, so it is caught and logged, not raised.
+        try:
+            entry_fingerprint = app_fingerprint(surface.observe())
+        except Exception as exc:
+            logger.event("app_fingerprint_check_failed", note=str(exc))
+        else:
+            recorded_fingerprint = capability.target.app_fingerprint
+            if recorded_fingerprint is None:
+                # Absent on the artifact -- nothing to compare, never a guess.
+                logger.event(
+                    "app_fingerprint_check", status="no_baseline", actual=entry_fingerprint
+                )
+            elif recorded_fingerprint == entry_fingerprint:
+                logger.event("app_fingerprint_check", status="match", actual=entry_fingerprint)
+            else:
+                logger.event(
+                    "app_fingerprint_mismatch",
+                    status="mismatch",
+                    recorded=recorded_fingerprint,
+                    actual=entry_fingerprint,
+                    note=(
+                        "the entry screen's structure differs from the recording "
+                        "(frame count, control mix, or title/heading text changed); "
+                        "this is a warning only and the run continued"
+                    ),
+                )
 
         after_observation: Observation | None = None
         for step in capability.steps:

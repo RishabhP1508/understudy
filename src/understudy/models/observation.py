@@ -22,6 +22,62 @@ from pydantic import BaseModel, Field
 # mismatch alone does not stop replay from attempting to resolve.
 PERCEPTION_VERSION = 2
 
+# Phase 12 (R7): a coarse "is this the same vendor product, same rendered version" signal for
+# drift detection ACROSS TENANTS -- distinct from PERCEPTION_VERSION above, which tracks drift in
+# OUR OWN reading of a page, and from a locator's own recorded_rank, which tracks drift in ONE
+# element's resolution. Deliberately structural only, never text content: two tenants' own renamed
+# labels must NOT change this hash (that is exactly what a TenantOverlay's vocabulary_map absorbs,
+# models/artifact.py), but a genuinely different screen shape should.
+_INTERACTIVE_ROLES = frozenset(
+    {
+        "textbox",
+        "searchbox",
+        "combobox",
+        "button",
+        "link",
+        "checkbox",
+        "radio",
+        "option",
+        "select",
+    }
+)
+
+
+def app_fingerprint(observation: Observation) -> str:
+    """A stable hash of the entry screen's STRUCTURAL signature: how many frames are loaded
+    (`len(observation.urls)`, decision 64's own "every loaded frame" list), how many elements of
+    each INTERACTIVE role are present, and the screen's own title/heading text. Pure and
+    deterministic -- the same Observation hashes the same every time -- and a structurally
+    different one (a different frame count, a different control mix, a different title) hashes
+    differently.
+
+    Captured once, from the FIRST observation after navigating to the target (agent/loop.py),
+    carried into `TargetApp.app_fingerprint` by record/recorder.py, and recomputed at replay time
+    (replay/engine.py) purely as a drift SIGNAL -- a mismatch warns, it never fails a replay and
+    never gates one, the same non-gating stance PERCEPTION_VERSION already takes above.
+    """
+    role_counts: dict[str, int] = {}
+    for element in observation.elements:
+        if element.role in _INTERACTIVE_ROLES:
+            role_counts[element.role] = role_counts.get(element.role, 0) + 1
+    headings = sorted(
+        element.name
+        for element in observation.elements
+        if element.role == "heading" and element.name
+    )
+    payload = json.dumps(
+        {
+            "frame_count": len(observation.urls),
+            "role_counts": dict(sorted(role_counts.items())),
+            "title": observation.title,
+            "headings": headings,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 # Phase 8 (docs/adr/0012): the field-marking vocabulary safety/redact.py's Redactor consults so
 # R3 (the whole-string credential-shaped-literal rule) applies only to a VALUE_CARRYING field --
 # what was actually typed, an example value, an extracted output -- never to a STRUCTURAL one: an

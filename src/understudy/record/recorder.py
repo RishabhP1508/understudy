@@ -893,6 +893,16 @@ def build_capability(
             break
     if success_checkpoint is None:
         raise ValueError("run.jsonl has no goal_verified event; cannot record a capability")
+
+    # Phase 12 (B3): agent/loop.py logs one "app_fingerprint" event, from the first observation
+    # after navigating to the target, before anything else in the run can change the page. None
+    # on a log that predates this event (every discovery run before Phase 12) -- honestly absent,
+    # never guessed; `understudy fingerprint` (cli.py) is the human-run adoption path for those.
+    app_fingerprint_value: str | None = None
+    for event in events:
+        if event.get("type") == "app_fingerprint":
+            app_fingerprint_value = event.get("fingerprint")
+            break
     # Stage 4 (Phase 9, B6): generalize BEFORE postconditions are derived -- the last step's
     # postcondition IS this checkpoint (_derive_postcondition's branch (c)).
     success_checkpoint = _generalize_success_checkpoint(success_checkpoint, act_events)
@@ -933,7 +943,9 @@ def build_capability(
         capability_id=capability_id,
         name=name,
         description=description,
-        target=TargetApp(app_id=policy.app_id, entry_point=target),
+        target=TargetApp(
+            app_id=policy.app_id, entry_point=target, app_fingerprint=app_fingerprint_value
+        ),
         inputs=list(inputs.values()),
         outputs=outputs,
         steps=steps,
