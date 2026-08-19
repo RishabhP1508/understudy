@@ -1,0 +1,14 @@
+{
+  "kind": "hard_failure",
+  "step_id": 9,
+  "category": "escalation_unresolved",
+  "expected": "step 9 (click) to be permitted by policy",
+  "observed": "risk_replay: RISKY_IRREVERSIBLE refused in replay: requires capability status 'approved' and allow_risky=True (got capability_status='approved', allow_risky=False): the risky_labels heuristic did not match element name 'Submit', but a currently loaded URL ('/member/12345/subaccount/new') matches a mutating_routes pattern (checked 3 loaded URL(s)) -- escalated as intervention 'esc97c2e4cb36', which expired with no operator resolution",
+  "evidence_refs": [
+    "steps/009_before.png",
+    "steps/009_after.png",
+    "dom/009.html",
+    "a11y/009.json",
+    "trace.zip"
+  ]
+}

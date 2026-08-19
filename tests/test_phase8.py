@@ -1,7 +1,7 @@
 """Phase 8 tests: the full Capability schema, record/canonicalize.py, and the rewritten
 record/recorder.py. Everything here runs with no browser, no network, and no API key: the real
 capability under test is built by calling `build_capability` directly against the REAL,
-already-on-disk evidence log at `evidence/discovery-b2405e162ba4/` (the one genuine discovery run
+already-on-disk evidence log at `evidence/discovery/` (the one genuine discovery run
 this project's non-negotiable requirement depends on) with `llm=None`, so this exercises D5's
 deterministic degrade path -- never a live model call. Per docs/adr/0011, no test here depends on
 the frozen CONTENT of a file under `artifacts/`; the capability under test is built fresh, in
@@ -37,7 +37,7 @@ from understudy.safety.policy import Policy, PolicyGate
 from understudy.safety.redact import Redactor
 from understudy.surface.base import Action, Navigate, Type
 
-EVIDENCE_DIR = Path(__file__).parent.parent / "evidence" / "discovery-b2405e162ba4"
+EVIDENCE_DIR = Path(__file__).parent.parent / "evidence" / "discovery"
 POLICY_PATH = Path(__file__).parent.parent / "policies" / "legacy_bank.yaml"
 GOAL = "look up member 12345 and read their current savings balance"
 TARGET = "http://127.0.0.1:5055/login"

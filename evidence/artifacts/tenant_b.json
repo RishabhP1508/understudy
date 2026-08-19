@@ -1,0 +1,34 @@
+{
+  "tenant_id": "tenant_b",
+  "base_capability_id": "open-a-new-savings-subaccount-for-member-12345-with-the-nickname-vacation-fund-and-an-initial-deposit-of-250",
+  "base_version": 2,
+  "entry_point_override": "http://127.0.0.1:5055/tenantb/login",
+  "vocabulary_map": {
+    "Member ID": "Customer ID",
+    "Subaccount": "Linked Account",
+    "Submit": "Continue",
+    "/members": "/tenantb/customers",
+    "?f7=": "?q=",
+    "/member/": "/tenantb/customer/",
+    "/subaccount/": "/linked-account/"
+  },
+  "step_overrides": {
+    "7": {"postcondition": {"kind": "element_present", "target": "textbox", "value": "Opening Deposit"}},
+    "9": {"postcondition": {"kind": "element_present", "target": "button", "value": "Confirm"}}
+  },
+  "extra_steps": [
+    {
+      "after_step_id": "9",
+      "step": {
+        "id": "9b",
+        "index": 10,
+        "action": "click",
+        "target": {"role": "button", "name": "Confirm", "frame_path": ["contentframe"]},
+        "postcondition": {"kind": "text_present", "target": "page", "value": "Linked Account Opened"},
+        "risk_class": "RISKY_IRREVERSIBLE",
+        "rationale": "Tenant B splits submission into a review step: 'Continue' only submits the entered values to a review screen, and this click on the review screen's own 'Confirm' is what actually creates the account -- the same irreversible creation tenant A performs in a single Submit click."
+      }
+    }
+  ],
+  "notes": "Deliberately leaves 'Username'->'User ID' (step 0) and 'Initial Deposit'->'Opening Deposit' (step 8's own TARGET) UNDECLARED in vocabulary_map: both are absorbed positionally by the ranked locator's role_ordinal rung (each resolves at rank 5 instead of rank 1), so this overlay proves the locator strategy surviving an undeclared rename rather than papering over it, while `understudy drift` still names both steps as drifted. Step 7's postcondition names that SAME renamed field but is declared via step_overrides instead, because checkpoint_satisfied (models/artifact.py) matches role and name exactly with no ranked fallback -- a rename a locator can absorb positionally still fails a checkpoint hard, so any rename a checkpoint references must be declared even when its descriptor does not need to be."
+}

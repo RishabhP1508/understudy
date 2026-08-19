@@ -1,0 +1,14 @@
+{
+  "kind": "hard_failure",
+  "step_id": 2,
+  "category": "app_error",
+  "expected": "step 2 (click 'Login'): the URL 'http://127.0.0.1:5055/members' to be loaded",
+  "observed": "app_error detected: An unexpected error occurred.",
+  "evidence_refs": [
+    "steps/002_before.png",
+    "steps/002_after.png",
+    "dom/002.html",
+    "a11y/002.json",
+    "trace.zip"
+  ]
+}

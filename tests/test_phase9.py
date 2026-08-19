@@ -2,7 +2,7 @@
 
 Task A (top of file): the one-and-only run_end event.
 
-Measured defect: evidence/discovery-b2405e162ba4/run.jsonl has TWO "run_end" lines, because
+Measured defect: evidence/discovery/run.jsonl has TWO "run_end" lines, because
 agent/loop.py's goal_verified branch used to reimplement _end()'s shape inline with its own
 logger.event("run_end", ...) call. EvidenceLogger.run_end() closes that off structurally: it is
 the only method that writes a run_end event, and a second call on the same logger instance is a
@@ -11,7 +11,7 @@ silent no-op.
 Task B (below): replay/outcomes.py's detectors, replay/recovery.py's triggers and recovery
 actions, models/artifact.py's login_prefix_len, record/recorder.py's gated seeding and its B5/B6
 fixes, and replay/engine.py's parameter validation, drift detection, and recovery loop -- all
-against real, produced data (evidence/discovery-b2405e162ba4, the one genuine discovery run this
+against real, produced data (evidence/discovery, the one genuine discovery run this
 project's non-negotiable requirement depends on), never hand-authored.
 
 Every EvidenceLogger here takes base_dir=tmp_path (tests/conftest.py enforces this for the whole
@@ -276,7 +276,7 @@ def test_cli_error_path_uses_the_guarded_run_end_method(tmp_path: Path) -> None:
 # ============================================================================================
 
 POLICY_PATH = Path(__file__).parent.parent / "policies" / "legacy_bank.yaml"
-EVIDENCE_DIR = Path(__file__).parent.parent / "evidence" / "discovery-b2405e162ba4"
+EVIDENCE_DIR = Path(__file__).parent.parent / "evidence" / "discovery"
 GOAL = "look up member 12345 and read their current savings balance"
 TARGET = "http://127.0.0.1:5055/login"
 CAPABILITY_ID = "look-up-member-12345-and-read-their-current-savings-balance"

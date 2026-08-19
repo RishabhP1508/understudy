@@ -451,6 +451,22 @@ def _finish_result(
     return Success(outputs=outputs, steps_run=steps_run, duration_ms=duration_ms)
 
 
+def _finish_replay(logger: EvidenceLogger, result: ReplayResult) -> None:
+    """THE one place a replay run's event stream gets its terminal marker and its `result.json`
+    written -- called from every one of `replay_resolved`'s three finalization sites (the two
+    caller-error returns before a browser ever launches, and the main run's own `finally`), never
+    at each of the dozen `return` statements a step, the entry navigate, or an escalation can take.
+    Before this, only the all-steps-ran path logged anything at the moment a run ended (as
+    `checkpoint_eval`, which is a different fact -- what the success checkpoint evaluated to, not
+    that the run ended); a run that returned early on a business outcome or a hard failure left
+    `run.jsonl` looking truncated even though `result.json` was always written. `kind` is the
+    result contract's own discriminator (`success`/`business_outcome`/`hard_failure`/`escalated`),
+    so a reviewer scanning the log sees exactly how the run ended without opening a second file.
+    """
+    logger.event("replay_end", kind=result.kind)
+    logger.write_result(result)
+
+
 def _resolve_escalation(
     broker: SessionBroker,
     logger: EvidenceLogger,
@@ -1413,7 +1429,7 @@ def replay_resolved(
             category=FailureCategory.INVALID_PARAMS.value,
             note=result.observed,
         )
-        logger.write_result(result)
+        _finish_replay(logger, result)
         return result
 
     type_errors = _param_type_errors(capability, params)
@@ -1432,7 +1448,7 @@ def replay_resolved(
             category=FailureCategory.INVALID_PARAMS.value,
             note=result.observed,
         )
-        logger.write_result(result)
+        _finish_replay(logger, result)
         return result
 
     policy = load_policy(policy_path)
@@ -1582,7 +1598,7 @@ def replay_resolved(
         resolved_success = _resolve_checkpoint(capability.success, capability, params)
         checkpoint_verified = checkpoint_satisfied(final_observation, resolved_success)
         logger.event(
-            "replay_end",
+            "checkpoint_eval",
             phase="verify",
             checkpoint_eval=resolved_success.model_dump(),
             outcome_match=str(checkpoint_verified),
@@ -1601,7 +1617,7 @@ def replay_resolved(
     finally:
         try:
             if result is not None:
-                logger.write_result(result)
+                _finish_replay(logger, result)
             logger.stop_trace(surface, keep=(result is None or isinstance(result, HardFailure)))
         finally:
             surface.close()
